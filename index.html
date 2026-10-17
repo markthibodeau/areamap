@@ -682,7 +682,11 @@ function syncToSheet(rec){ try{ if(window.google&&google.script&&google.script.r
 
 /* ---------- boot ---------- */
 render(); layoutSheet();
-if(navigator.geolocation&&!store.settings.noAutoLocate){ navigator.geolocation.getCurrentPosition(pos=>{ const c=pos.coords; if(!pts.length) map.setView([c.latitude,c.longitude],18); lastFix={p:{lat:c.latitude,lng:c.longitude},acc:c.accuracy,t:Date.now()}; drawMe(); },()=>{},{enableHighAccuracy:false,timeout:6000,maximumAge:60000}); }
+// No automatic location request at launch: iOS home-screen web apps refuse a request that is not
+// behind a tap and then cache that refusal, which also blocks the crosshair and Walk afterwards.
+// Location is requested only from the crosshair and Walk buttons. The map reopens where you left it.
+if(store.settings.lastView){ try{ map.setView(store.settings.lastView.c,store.settings.lastView.z,{animate:false}); }catch(e){} }
+map.on('moveend',()=>{ const c=map.getCenter(); store.settings.lastView={c:[+c.lat.toFixed(6),+c.lng.toFixed(6)],z:map.getZoom()}; persist(); });
 window.addEventListener('resize',()=>{map.invalidateSize(); layoutSheet();});
 })();
 </script>
