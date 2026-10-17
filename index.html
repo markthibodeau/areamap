@@ -317,8 +317,9 @@ const FT=3.280839895, SQFT=10.76391041671, ACRE_M2=4046.8564224, HA_M2=10000, SQ
 let store={saved:[],settings:{units:'imperial',layer:'sat',rates:null}};
 try{const s=JSON.parse(localStorage.getItem(KEY)||'null'); if(s&&s.saved) store=Object.assign(store,s);}catch(e){}
 function persist(){try{localStorage.setItem(KEY,JSON.stringify(store));}catch(e){}}
-const DEFAULT_RATES={sealGal:90,sealCoats:2,asphaltMm:50,asphaltDens:2.4,gravelMm:150,gravelDens:2.2,concreteMm:100,crackLbPer100:9,paintFtPerGal:320,stallWidthFt:9};
-const rates=Object.assign({},DEFAULT_RATES,store.settings.rates||{});
+const DEFAULT_RATES={sealGal:90,sealCoats:2,asphaltMm:75,gravelMm:150,gravelDens:2.2,concreteMm:100,crackLbPer100:9,paintFtPerGal:320,stallWidthFt:9};
+const ASPHALT_DENSITY=2.4; // JB Lines rule (locked Oct 17 2026): tonnes = m² × thickness (m) × 2.4
+const rates=Object.assign({},DEFAULT_RATES,store.settings.rates||{}); delete rates.asphaltDens; if(store.settings.rates&&store.settings.rates.asphaltMm===50){rates.asphaltMm=75;}
 
 /* ---------- geodesy ---------- */
 const R=6378137, R2=6371008.8, rad=d=>d*Math.PI/180;
@@ -527,8 +528,7 @@ function renderDetails(m2,len){
   if(m2>0){
     row('Sealcoat coverage','sealGal','sq ft/gal/coat',nf(sqft/rates.sealGal*rates.sealCoats,0),'gal');
     row('Sealcoat coats','sealCoats','coats',nf(sqft/rates.sealGal*rates.sealCoats/5,0),'pails (5 gal)');
-    row('Asphalt thickness','asphaltMm','mm',nf(m2*rates.asphaltMm/1000*rates.asphaltDens,1),'tonnes');
-    row('Asphalt density','asphaltDens','t/m³',nf(m2*rates.asphaltMm/1000*rates.asphaltDens*1.1,1),'t +10% waste');
+    row('Asphalt · m² × thickness × 2.4','asphaltMm','mm thick',nf(m2*rates.asphaltMm/1000*ASPHALT_DENSITY,1),'tonnes');
     row('Gravel base depth','gravelMm','mm',nf(m2*rates.gravelMm/1000*rates.gravelDens,1),'tonnes');
     row('Concrete thickness','concreteMm','mm',nf(m2*rates.concreteMm/1000,2)+' m³ · '+nf(m2*rates.concreteMm/1000*1.30795,2),'yd³');
     row('Stall width','stallWidthFt','ft',nf(Math.floor(Math.sqrt(sqft)/rates.stallWidthFt),0),'stalls per √side (rough)');
