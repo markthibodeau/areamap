@@ -138,6 +138,7 @@ h3:first-child{margin-top:2px}
 .est input{width:64px;height:30px;border:1px solid var(--line);border-radius:7px;background:var(--bg);padding:0 7px;text-align:right;font-size:13px;-webkit-appearance:none}
 .est b{font-variant-numeric:tabular-nums;text-align:right;line-height:1.25}
 .est span.u{color:var(--muted);font-size:12px}
+.est .tu{color:var(--accent);font-size:12px;font-weight:700;padding:4px 2px}
 .note{font-size:12px;color:var(--muted);margin:6px 0 0;line-height:1.4}
 
 /* Modal sheets (save, saved list, export, circle radius) */
@@ -293,6 +294,8 @@ h3:first-child{margin-top:2px}
     <div class="chips" id="areaunits"></div>
     <h3>Lengths, perimeter and radius</h3>
     <div class="chips" id="lenunits"></div>
+    <h3>Thickness (asphalt, gravel, concrete)</h3>
+    <div class="chips" id="thickunits"><button class="chip" data-u="mm">Millimetres</button><button class="chip" data-u="in">Inches</button></div>
     <p class="note">Auto shows square feet under half an acre and acres above it (or m² and hectares). Tap the big number on the main screen to cycle units without opening this sheet. The Details table always lists every unit.</p>
   </div>
 </div>
@@ -345,6 +348,8 @@ function centroid(pts){if(!pts.length)return null;let x=0,y=0;pts.forEach(p=>{x+
 /* ---------- formatting ---------- */
 if(!store.settings.areaUnit) store.settings.areaUnit=store.settings.units==='metric'?'auto-met':'auto-imp';
 if(!store.settings.lengthUnit) store.settings.lengthUnit='auto';
+if(!store.settings.thickUnit) store.settings.thickUnit='mm';
+const THICK_KEYS=['asphaltMm','gravelMm','concreteMm']; const inches=()=>store.settings.thickUnit==='in';
 const AREA_UNITS=[['auto-imp','Auto · ft / acres','ft · ac'],['sqft','Square feet','sq ft'],['sqyd','Square yards','sq yd'],['ac','Acres','acres'],['auto-met','Auto · m² / ha','m² · ha'],['m2','Square metres','m²'],['ha','Hectares','ha']];
 const LEN_UNITS=[['auto','Auto','auto'],['ft','Feet','ft'],['yd','Yards','yd'],['m','Metres','m']];
 const imperial=()=>!['auto-met','m2','ha'].includes(store.settings.areaUnit);
@@ -524,13 +529,14 @@ function renderDetails(m2,len){
   if(tool==='circle'&&circle.center) rows.push(['Centre',circle.center.lat.toFixed(6)+', '+circle.center.lng.toFixed(6)]);
   kv.innerHTML=rows.map(r=>'<tr><td>'+r[0]+'</td><td>'+r[1]+'</td></tr>').join('')||'<tr><td colspan="2" style="color:var(--muted)">Nothing measured yet</td></tr>';
   const est=$('estimates'); const sqft=m2*SQFT, ft=len*FT; const lines=[];
-  const row=(label,key,unit,calc,outUnit)=>lines.push('<div class="est"><span>'+label+'</span><span><input type="number" inputmode="decimal" step="any" data-rate="'+key+'" value="'+rates[key]+'" aria-label="'+label+' rate"> <span class="u">'+unit+'</span></span><b>'+calc+' <span class="u">'+outUnit+'</span></b></div>');
+  const row=(label,key,unit,calc,outUnit)=>{ const isT=THICK_KEYS.includes(key); const val=isT? (inches()? +(rates[key]/25.4).toFixed(2) : +(+rates[key]).toFixed(1)) : rates[key]; const u=isT?(inches()?'in':'mm'):unit;
+    lines.push('<div class="est"><span>'+label+'</span><span><input type="number" inputmode="decimal" step="any" data-rate="'+key+'" value="'+val+'" aria-label="'+label+' rate"> '+(isT?'<button class="u tu" type="button" aria-label="Switch thickness unit">'+u+' ▾</button>':'<span class="u">'+u+'</span>')+'</span><b>'+calc+' <span class="u">'+outUnit+'</span></b></div>'); };
   if(m2>0){
     row('Sealcoat coverage','sealGal','sq ft/gal/coat',nf(sqft/rates.sealGal*rates.sealCoats,0),'gal');
     row('Sealcoat coats','sealCoats','coats',nf(sqft/rates.sealGal*rates.sealCoats/5,0),'pails (5 gal)');
-    row('Asphalt · m² × thickness × 2.4','asphaltMm','mm thick',nf(m2*rates.asphaltMm/1000*ASPHALT_DENSITY,1),'tonnes');
-    row('Gravel base depth','gravelMm','mm',nf(m2*rates.gravelMm/1000*rates.gravelDens,1),'tonnes');
-    row('Concrete thickness','concreteMm','mm',nf(m2*rates.concreteMm/1000,2)+' m³ · '+nf(m2*rates.concreteMm/1000*1.30795,2),'yd³');
+    row('Asphalt · m² × thickness × 2.4','asphaltMm','thick',nf(m2*rates.asphaltMm/1000*ASPHALT_DENSITY,1),'tonnes');
+    row('Gravel base depth','gravelMm','',nf(m2*rates.gravelMm/1000*rates.gravelDens,1),'tonnes');
+    row('Concrete thickness','concreteMm','',nf(m2*rates.concreteMm/1000,2)+' m³ · '+nf(m2*rates.concreteMm/1000*1.30795,2),'yd³');
     row('Stall width','stallWidthFt','ft',nf(Math.floor(Math.sqrt(sqft)/rates.stallWidthFt),0),'stalls per √side (rough)');
   }
   if(len>0&&m2===0){
@@ -538,7 +544,8 @@ function renderDetails(m2,len){
     row('Striping paint','paintFtPerGal','ft/gal (4″ line)',nf(ft/rates.paintFtPerGal,1),'gal');
   }
   est.innerHTML=lines.join(''); $('esthead').style.display=lines.length?'':'none';
-  est.querySelectorAll('input').forEach(inp=>inp.onchange=()=>{const v=parseFloat(inp.value); if(v>0){rates[inp.dataset.rate]=v; store.settings.rates=rates; persist(); renderDetails(m2,len);}});
+  est.querySelectorAll('input').forEach(inp=>inp.onchange=()=>{let v=parseFloat(inp.value); if(v>0){ if(THICK_KEYS.includes(inp.dataset.rate)&&inches()) v=v*25.4; rates[inp.dataset.rate]=v; store.settings.rates=rates; persist(); renderDetails(m2,len);}});
+  est.querySelectorAll('.tu').forEach(b=>b.onclick=()=>{store.settings.thickUnit=inches()?'mm':'in'; persist(); refreshUnitUI(); renderDetails(m2,len); toast('Thickness in '+(inches()?'inches':'millimetres'));});
 }
 let hintTimer; function hint(t){const h=$('hint'); if(!t){h.style.display='none';return;} h.style.display='block'; h.textContent=t;}
 let toastTimer; function toast(t){const el=$('toast'); el.textContent=t; el.classList.add('show'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>el.classList.remove('show'),2600);}
@@ -547,11 +554,12 @@ new ResizeObserver(layoutSheet).observe($('sheet'));
 
 /* units */
 function unitLabel(){ const a=AREA_UNITS.find(x=>x[0]===store.settings.areaUnit)||AREA_UNITS[0]; const l=store.settings.lengthUnit; return a[2]+(l!=='auto'?' · '+l:''); }
-function refreshUnitUI(){ $('unitbtn').textContent=unitLabel(); document.querySelectorAll('#areaunits .chip').forEach(c=>c.classList.toggle('on',c.dataset.u===store.settings.areaUnit)); document.querySelectorAll('#lenunits .chip').forEach(c=>c.classList.toggle('on',c.dataset.u===store.settings.lengthUnit)); }
+function refreshUnitUI(){ $('unitbtn').textContent=unitLabel(); document.querySelectorAll('#thickunits .chip').forEach(c=>c.classList.toggle('on',c.dataset.u===store.settings.thickUnit)); document.querySelectorAll('#areaunits .chip').forEach(c=>c.classList.toggle('on',c.dataset.u===store.settings.areaUnit)); document.querySelectorAll('#lenunits .chip').forEach(c=>c.classList.toggle('on',c.dataset.u===store.settings.lengthUnit)); }
 $('areaunits').innerHTML=AREA_UNITS.map(u=>'<button class="chip" data-u="'+u[0]+'">'+u[1]+'</button>').join('');
 $('lenunits').innerHTML=LEN_UNITS.map(u=>'<button class="chip" data-u="'+u[0]+'">'+u[1]+'</button>').join('');
 document.querySelectorAll('#areaunits .chip').forEach(c=>c.onclick=()=>{store.settings.areaUnit=c.dataset.u; persist(); refreshUnitUI(); render();});
 document.querySelectorAll('#lenunits .chip').forEach(c=>c.onclick=()=>{store.settings.lengthUnit=c.dataset.u; persist(); refreshUnitUI(); render();});
+document.querySelectorAll('#thickunits .chip').forEach(c=>c.onclick=()=>{store.settings.thickUnit=c.dataset.u; persist(); refreshUnitUI(); render();});
 $('unitbtn').onclick=()=>openModal('unitsmodal');
 $('big').onclick=()=>{ if(tool==='marker')return; if(tool==='distance'){ const o=LEN_UNITS.map(u=>u[0]).filter(u=>u!=='auto'); const cur=store.settings.lengthUnit==='auto'?(imperial()?'ft':'m'):store.settings.lengthUnit; store.settings.lengthUnit=o[(o.indexOf(cur)+1)%o.length]; }
   else { const o=AREA_UNITS.map(u=>u[0]); store.settings.areaUnit=o[(o.indexOf(store.settings.areaUnit)+1)%o.length]; }
