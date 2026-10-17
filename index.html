@@ -414,6 +414,9 @@ map.on('click',e=>{
 map.on('zoomend',render);
 
 /* ---------- walk mode (GPS) ---------- */
+function deniedMsg(){ const standalone=window.navigator.standalone===true||matchMedia('(display-mode: standalone)').matches;
+  return standalone? 'Location is off for the home-screen app. Settings › Privacy & Security › Location Services › AreaMap → While Using. No AreaMap entry? Remove the icon, add it again from Safari, then tap the crosshair.'
+                   : 'Location permission denied. Settings › Privacy & Security › Location Services › Safari Websites → While Using, then reload.'; }
 function startWalk(){
   if(!navigator.geolocation){toast('GPS not available in this browser');return;}
   if(tool!=='area'&&tool!=='distance'){tool='area';}
@@ -428,7 +431,7 @@ function startWalk(){
     const last=pts[pts.length-1]; const minMove=Math.max(2,c.accuracy/3);
     if(!last||dist(last,p)>=minMove){ pts.push(p); render(); map.panTo(p,{animate:false}); }
     hint('Walking · ±'+Math.round(c.accuracy)+' m · '+pts.length+' points · tap Walk to finish');
-  },err=>{toast(err.code===1?'Location permission denied. Allow it in Settings › Safari › Location.':'GPS error: '+err.message); stopWalk(false);},
+  },err=>{toast(err.code===1?deniedMsg():'GPS error: '+err.message); stopWalk(false);},
   {enableHighAccuracy:true,maximumAge:0,timeout:20000});
   hint('Walk the boundary · getting GPS fix…');
   toast('Keep the screen on while walking. The web can’t track with the screen locked.');
@@ -456,7 +459,7 @@ $('locbtn').onclick=()=>{
   if(!navigator.geolocation){toast('GPS not available');return;}
   $('locbtn').classList.add('on');
   navigator.geolocation.getCurrentPosition(pos=>{const c=pos.coords; lastFix={p:{lat:c.latitude,lng:c.longitude},acc:c.accuracy,t:Date.now()}; drawMe(); map.setView([c.latitude,c.longitude],Math.max(map.getZoom(),18)); $('locbtn').classList.remove('on'); toast('Accuracy ±'+Math.round(c.accuracy)+' m');},
-    err=>{$('locbtn').classList.remove('on'); toast(err.code===1?'Location permission denied. Allow it in Settings › Safari › Location.':'Could not get location: '+err.message);},
+    err=>{$('locbtn').classList.remove('on'); toast(err.code===1?deniedMsg():'Could not get location: '+err.message);},
     {enableHighAccuracy:true,timeout:15000,maximumAge:5000});
 };
 
@@ -548,7 +551,7 @@ function renderDetails(m2,len){
   est.querySelectorAll('.tu').forEach(b=>b.onclick=()=>{store.settings.thickUnit=inches()?'mm':'in'; persist(); refreshUnitUI(); renderDetails(m2,len); toast('Thickness in '+(inches()?'inches':'millimetres'));});
 }
 let hintTimer; function hint(t){const h=$('hint'); if(!t){h.style.display='none';return;} h.style.display='block'; h.textContent=t;}
-let toastTimer; function toast(t){const el=$('toast'); el.textContent=t; el.classList.add('show'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>el.classList.remove('show'),2600);}
+let toastTimer; function toast(t){const el=$('toast'); el.textContent=t; el.classList.add('show'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>el.classList.remove('show'),t.length>80?7000:2600);}
 function layoutSheet(){ const h=$('sheet').offsetHeight; document.documentElement.style.setProperty('--sheet-h',h+'px'); }
 new ResizeObserver(layoutSheet).observe($('sheet'));
 
