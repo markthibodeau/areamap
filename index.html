@@ -1,0 +1,674 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>JB AreaMap</title>
+<meta name="description" content="Measure land area, acres, perimeter and distances on satellite imagery. Tap the corners or walk the boundary with GPS.">
+<meta name="theme-color" content="#14321f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="AreaMap">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" type="image/png" href="icon-180.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+/* Layout: full-bleed satellite map, a slim search bar floating at the top, and a bottom sheet
+   that carries the live readout, the tool rail and the actions. Everything is thumb reach. */
+:root{
+  --bg:#f3f2ec;            /* bone */
+  --panel:rgba(255,255,255,.94);
+  --panel-solid:#ffffff;
+  --fg:#171a16;
+  --muted:#5e665a;
+  --line:#d6d9cf;
+  --accent:#1f7a3f;        /* field green */
+  --accent-fg:#ffffff;
+  --accent-soft:#e3f1e7;
+  --warn:#b4541a;
+  --danger:#b3261e;
+  --shape:#ffd23f;         /* survey yellow on imagery */
+  --shape-fill:rgba(255,210,63,.22);
+  --walk:#36c6ff;
+  --radius:14px;
+  --shadow:0 6px 24px rgba(0,0,0,.18);
+  --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Arial,sans-serif;
+  --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#101410; --panel:rgba(22,27,22,.94); --panel-solid:#161b16; --fg:#eef1ea; --muted:#9aa394;
+    --line:#2d352d; --accent:#4fbf74; --accent-fg:#06180c; --accent-soft:#1b2f22; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#101410; --panel:rgba(22,27,22,.94); --panel-solid:#161b16; --fg:#eef1ea; --muted:#9aa394;
+  --line:#2d352d; --accent:#4fbf74; --accent-fg:#06180c; --accent-soft:#1b2f22; color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;overscroll-behavior:none}
+body{font-family:var(--font);background:var(--bg);color:var(--fg);font-size:15px;-webkit-text-size-adjust:100%;
+  -webkit-tap-highlight-color:transparent;position:fixed;inset:0;overflow:hidden}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;touch-action:manipulation}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+input,select,textarea{font:inherit;color:inherit}
+#map{position:absolute;inset:0;background:#0b1a10}
+.leaflet-container{font:inherit}
+.leaflet-control-attribution{font-size:10px;background:rgba(255,255,255,.7)}
+.leaflet-bottom{bottom:calc(var(--sheet-h,210px))}
+.leaflet-bottom.leaflet-left{display:none}
+
+/* Top bar */
+#top{position:absolute;left:0;right:0;top:0;z-index:1000;display:flex;gap:8px;
+  padding:calc(8px + env(safe-area-inset-top,0px)) max(10px,env(safe-area-inset-right,0px)) 0 max(10px,env(safe-area-inset-left,0px))}
+#searchwrap{flex:1;min-width:0;position:relative}
+#search{width:100%;height:44px;border-radius:12px;border:0;background:var(--panel);box-shadow:var(--shadow);
+  padding:0 40px 0 14px;font-size:16px;-webkit-appearance:none}
+#searchclear{position:absolute;right:6px;top:6px;width:32px;height:32px;border-radius:8px;color:var(--muted);font-size:18px}
+#results{position:absolute;left:0;right:0;top:48px;background:var(--panel-solid);border-radius:12px;box-shadow:var(--shadow);
+  overflow:hidden;max-height:50vh;overflow-y:auto}
+#results button{display:block;width:100%;text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);font-size:14px;line-height:1.3}
+#results button:last-child{border-bottom:0}
+#results small{display:block;color:var(--muted);font-size:12px}
+.iconbtn{width:44px;height:44px;flex:0 0 44px;border-radius:12px;background:var(--panel);box-shadow:var(--shadow);
+  display:grid;place-items:center;color:var(--fg)}
+.iconbtn svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.iconbtn.on{background:var(--accent);color:var(--accent-fg)}
+#gpsdot{position:absolute;right:6px;top:6px;width:8px;height:8px;border-radius:50%;background:var(--danger);display:none}
+.iconbtn{position:relative}
+
+/* Float hints on the map */
+#hint{position:absolute;left:50%;transform:translateX(-50%);top:calc(64px + env(safe-area-inset-top,0px));z-index:900;
+  background:rgba(0,0,0,.62);color:#fff;font-size:13px;padding:7px 12px;border-radius:999px;pointer-events:none;white-space:nowrap;
+  max-width:calc(100% - 32px);overflow:hidden;text-overflow:ellipsis}
+#toast{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(var(--sheet-h,210px) + 14px);z-index:1200;background:var(--fg);
+  color:var(--bg);font-size:13px;padding:9px 14px;border-radius:10px;box-shadow:var(--shadow);opacity:0;transition:opacity .2s;pointer-events:none;max-width:90%}
+#toast.show{opacity:1}
+
+/* Vertex handles and labels on the map */
+.vtx{width:22px;height:22px;margin:-11px 0 0 -11px!important;border-radius:50%;background:var(--shape);border:2px solid #1b1b1b;
+  box-shadow:0 1px 4px rgba(0,0,0,.5)}
+.vtx.first{background:#fff}
+.vtx.mid{width:14px;height:14px;margin:-7px 0 0 -7px!important;background:rgba(255,255,255,.75);border:1.5px solid #1b1b1b;opacity:.9}
+.vtx.me{width:18px;height:18px;margin:-9px 0 0 -9px!important;background:var(--walk);border:3px solid #fff;box-shadow:0 0 0 2px rgba(54,198,255,.5)}
+.seglabel{background:transparent;border:0;box-shadow:none;width:0!important;height:0!important}
+.seglabel span{position:absolute;left:10px;top:-24px;background:rgba(0,0,0,.72);color:#fff;border-radius:6px;padding:2px 6px;font-size:11.5px;font-weight:600;font-family:var(--mono);white-space:nowrap}
+.seglabel::before{display:none}
+.arealabel{background:transparent;border:0;box-shadow:none;color:#fff;font-weight:800;font-size:15px;text-shadow:0 1px 3px #000,0 0 8px #000;
+  text-align:center;white-space:nowrap;font-family:var(--mono)}
+.arealabel::before{display:none}
+.savedlabel{background:rgba(0,0,0,.55);color:#fff;border:0;border-radius:5px;padding:1px 5px;font-size:11px;box-shadow:none}
+.savedlabel::before{display:none}
+
+/* Bottom sheet */
+#sheet{position:absolute;left:0;right:0;bottom:0;z-index:1000;background:var(--panel);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  border-radius:18px 18px 0 0;box-shadow:0 -4px 30px rgba(0,0,0,.22);
+  padding:6px max(12px,env(safe-area-inset-right,0px)) calc(10px + env(safe-area-inset-bottom,0px)) max(12px,env(safe-area-inset-left,0px));
+  display:flex;flex-direction:column;gap:10px;transition:transform .25s}
+#grab{width:40px;height:5px;border-radius:3px;background:var(--line);margin:0 auto}
+#readout{display:flex;align-items:flex-end;justify-content:space-between;gap:10px;min-height:52px}
+#big{cursor:pointer;font-size:34px;font-weight:800;letter-spacing:-.02em;line-height:1;font-variant-numeric:tabular-nums}
+#big small{font-size:15px;font-weight:600;color:var(--muted);margin-left:4px;letter-spacing:0}
+#sub{color:var(--muted);font-size:13px;margin-top:5px;font-variant-numeric:tabular-nums}
+#unitbtn{font-size:12px;font-weight:700;letter-spacing:.04em;color:var(--accent);background:var(--accent-soft);
+  padding:7px 10px;border-radius:999px;white-space:nowrap}
+#tools{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}
+.tool{display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px 2px;border-radius:12px;border:1px solid var(--line);
+  font-size:11px;font-weight:600;color:var(--muted);background:var(--panel-solid)}
+.tool svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.tool.on{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
+.tool.walk.on{background:#0a7ea4;border-color:#0a7ea4;color:#fff}
+#actions{display:grid;grid-template-columns:repeat(6,1fr);gap:6px}
+.act{height:40px;border-radius:10px;border:1px solid var(--line);font-size:12px;font-weight:600;background:var(--panel-solid);
+  display:flex;align-items:center;justify-content:center;gap:4px}
+.act:disabled{opacity:.4}
+.act.primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+.act.danger{color:var(--danger)}
+#details{display:none;border-top:1px solid var(--line);padding-top:8px;max-height:38vh;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch}
+#sheet.open #details{display:block}
+table.kv{width:100%;border-collapse:collapse;font-size:13px}
+table.kv td{padding:5px 0;border-bottom:1px solid var(--line)}
+table.kv td:last-child{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+h3{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:12px 0 4px;font-weight:700}
+h3:first-child{margin-top:2px}
+.est{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,auto);gap:6px 8px;align-items:center;font-size:13px;padding:5px 0;border-bottom:1px solid var(--line)}
+.est input{width:64px;height:30px;border:1px solid var(--line);border-radius:7px;background:var(--bg);padding:0 7px;text-align:right;font-size:13px;-webkit-appearance:none}
+.est b{font-variant-numeric:tabular-nums;text-align:right;line-height:1.25}
+.est span.u{color:var(--muted);font-size:12px}
+.note{font-size:12px;color:var(--muted);margin:6px 0 0;line-height:1.4}
+
+/* Modal sheets (save, saved list, export, circle radius) */
+.modal{position:absolute;inset:0;z-index:2000;background:rgba(0,0,0,.45);display:none;align-items:flex-end}
+.modal.show{display:flex}
+.modal .card{width:100%;background:var(--panel-solid);border-radius:18px 18px 0 0;
+  padding:14px max(16px,env(safe-area-inset-right,0px)) calc(16px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px));
+  max-height:85vh;overflow-y:auto;-webkit-overflow-scrolling:touch}
+.card h2{font-size:18px;margin:0 0 12px;display:flex;justify-content:space-between;align-items:center}
+.card h2 button{font-size:14px;font-weight:600;color:var(--accent)}
+.field{display:flex;flex-direction:column;gap:5px;margin-bottom:12px}
+.field label{font-size:12px;font-weight:600;color:var(--muted)}
+.field input,.field select,.field textarea{height:44px;border:1px solid var(--line);border-radius:10px;background:var(--bg);padding:0 12px;font-size:16px;-webkit-appearance:none}
+.field textarea{height:80px;padding:10px 12px;resize:none}
+.row{display:flex;gap:8px}
+.row>*{flex:1;min-width:0}
+.btn{width:100%;height:46px;border-radius:12px;font-weight:700;font-size:15px;border:1px solid var(--line);background:var(--panel-solid);display:flex;align-items:center;justify-content:center;gap:6px}
+.btn.primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+.btn.danger{color:var(--danger)}
+.saveditem{display:flex;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}
+.saveditem .sw{width:12px;height:12px;border-radius:3px;flex:0 0 12px;background:var(--shape)}
+.saveditem .t{flex:1;min-width:0}
+.saveditem .t b{display:block;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.saveditem .t span{font-size:12px;color:var(--muted)}
+.saveditem button{font-size:12px;font-weight:700;color:var(--accent);padding:6px 8px}
+.saveditem button.del{color:var(--danger)}
+.group{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:14px 0 2px}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.chip{padding:8px 12px;border-radius:999px;border:1px solid var(--line);font-size:13px;font-weight:600}
+.chip.on{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+#exporttext{width:100%;height:140px;border:1px solid var(--line);border-radius:10px;background:var(--bg);font-family:var(--mono);font-size:11px;padding:8px;resize:none}
+.empty{color:var(--muted);text-align:center;padding:30px 10px;font-size:14px;line-height:1.5}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div id="map" role="application" aria-label="Satellite map"></div>
+
+<div id="top">
+  <div id="searchwrap">
+    <input id="search" type="search" placeholder="Search address, place or 49.69, -112.84" autocomplete="off" autocorrect="off" autocapitalize="off" enterkeyhint="search" aria-label="Search">
+    <button id="searchclear" aria-label="Clear search" hidden>×</button>
+    <div id="results" hidden></div>
+  </div>
+  <button class="iconbtn" id="layerbtn" aria-label="Switch map layer" title="Map layer">
+    <svg viewBox="0 0 24 24"><path d="M12 3 2 8l10 5 10-5-10-5Z"/><path d="m2 12 10 5 10-5"/><path d="m2 16 10 5 10-5"/></svg>
+  </button>
+  <button class="iconbtn" id="locbtn" aria-label="Go to my location" title="My location">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><circle cx="12" cy="12" r="8"/><path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3"/></svg>
+    <span id="gpsdot"></span>
+  </button>
+</div>
+<div id="hint">Tap the corners of the area</div>
+<div id="toast" role="status"></div>
+
+<div id="sheet">
+  <div id="grab"></div>
+  <div id="readout">
+    <div style="min-width:0">
+      <div id="big">0<small>sq ft</small></div>
+      <div id="sub">Tap the map to place the first corner</div>
+    </div>
+    <button id="unitbtn" aria-label="Choose units">ft · ac</button>
+  </div>
+
+  <div id="tools" role="tablist" aria-label="Measuring tools">
+    <button class="tool on" data-tool="area" role="tab" aria-selected="true">
+      <svg viewBox="0 0 24 24"><path d="M5 6 19 4l1 14-15 1 0-13Z"/><circle cx="5" cy="6" r="1.5"/><circle cx="19" cy="4" r="1.5"/><circle cx="20" cy="18" r="1.5"/><circle cx="5" cy="19" r="1.5"/></svg>Area</button>
+    <button class="tool" data-tool="distance" role="tab" aria-selected="false">
+      <svg viewBox="0 0 24 24"><path d="M4 18 10 8l5 7 5-11"/><circle cx="4" cy="18" r="1.5"/><circle cx="10" cy="8" r="1.5"/><circle cx="15" cy="15" r="1.5"/><circle cx="20" cy="4" r="1.5"/></svg>Distance</button>
+    <button class="tool" data-tool="circle" role="tab" aria-selected="false">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 12h8"/><circle cx="12" cy="12" r="1.3"/></svg>Circle</button>
+    <button class="tool" data-tool="marker" role="tab" aria-selected="false">
+      <svg viewBox="0 0 24 24"><path d="M12 22s7-7.1 7-12.5A7 7 0 0 0 5 9.5C5 14.9 12 22 12 22Z"/><circle cx="12" cy="9.5" r="2.4"/></svg>Marker</button>
+    <button class="tool walk" data-tool="walk" role="tab" aria-selected="false">
+      <svg viewBox="0 0 24 24"><circle cx="13" cy="4" r="1.8"/><path d="m8 22 2.5-7 2.5 2v5M7 13l2-4.5 3-1 3 3 2 1M14 11l-1 4 2.5 2"/></svg>Walk</button>
+  </div>
+
+  <div id="actions">
+    <button class="act" id="undobtn" disabled aria-label="Undo">↶ Undo</button>
+    <button class="act" id="redobtn" disabled aria-label="Redo">↷ Redo</button>
+    <button class="act danger" id="clearbtn" disabled>Clear</button>
+    <button class="act" id="detailsbtn">Details</button>
+    <button class="act" id="savedbtn">Saved</button>
+    <button class="act primary" id="savebtn" disabled>Save</button>
+  </div>
+
+  <div id="details">
+    <h3>Measurements</h3>
+    <table class="kv" id="kv"></table>
+    <h3 id="esthead">Material estimates</h3>
+    <div id="estimates"></div>
+    <p class="note">Rates are planning defaults. Tap a rate to change it; changes are kept on this phone. Areas use geodesic math on the WGS84 ellipsoid radius, the same approach as GIS tools. This is not a legal survey.</p>
+    <div class="row" style="margin-top:10px">
+      <button class="btn" id="exportbtn">Export / Share</button>
+      <button class="btn" id="mapslink">Open in Maps</button>
+    </div>
+  </div>
+</div>
+
+<!-- Save sheet -->
+<div class="modal" id="savemodal" role="dialog" aria-modal="true" aria-labelledby="savetitle">
+  <div class="card">
+    <h2 id="savetitle">Save measurement <button data-close="savemodal">Cancel</button></h2>
+    <div class="field"><label for="savename">Name</label><input id="savename" placeholder="e.g. Northgate Plaza lot"></div>
+    <div class="row">
+      <div class="field"><label for="savegroup">Group / job</label><input id="savegroup" list="grouplist" placeholder="e.g. LDS 2026"><datalist id="grouplist"></datalist></div>
+    </div>
+    <div class="field"><label for="savenotes">Notes</label><textarea id="savenotes" placeholder="Condition, access, cracks, drains…"></textarea></div>
+    <button class="btn primary" id="savecommit">Save</button>
+  </div>
+</div>
+
+<!-- Saved list -->
+<div class="modal" id="listmodal" role="dialog" aria-modal="true" aria-labelledby="listtitle">
+  <div class="card">
+    <h2 id="listtitle">Saved measurements <button data-close="listmodal">Done</button></h2>
+    <div class="chips" id="groupchips"></div>
+    <div id="savedlist"></div>
+    <div class="row" style="margin-top:14px">
+      <button class="btn" id="showsaved">Show on map</button>
+      <button class="btn" id="exportall">Export all</button>
+    </div>
+  </div>
+</div>
+
+<!-- Export sheet -->
+<div class="modal" id="exportmodal" role="dialog" aria-modal="true" aria-labelledby="exporttitle">
+  <div class="card">
+    <h2 id="exporttitle">Export <button data-close="exportmodal">Done</button></h2>
+    <div class="chips" id="fmtchips">
+      <button class="chip on" data-fmt="summary">Summary</button>
+      <button class="chip" data-fmt="geojson">GeoJSON</button>
+      <button class="chip" data-fmt="kml">KML</button>
+      <button class="chip" data-fmt="gpx">GPX</button>
+      <button class="chip" data-fmt="csv">CSV</button>
+    </div>
+    <textarea id="exporttext" readonly aria-label="Export text"></textarea>
+    <div class="row" style="margin-top:10px">
+      <button class="btn primary" id="sharebtn">Share…</button>
+      <button class="btn" id="copybtn">Copy</button>
+      <button class="btn" id="emailbtn">Email</button>
+    </div>
+    <p class="note">Share sends a file to Mail, Messages, Files or Google Earth. KML and GeoJSON open in Google Earth and any GIS tool.</p>
+  </div>
+</div>
+
+<!-- Units sheet -->
+<div class="modal" id="unitsmodal" role="dialog" aria-modal="true" aria-labelledby="unitstitle">
+  <div class="card">
+    <h2 id="unitstitle">Units <button data-close="unitsmodal">Done</button></h2>
+    <h3>Area</h3>
+    <div class="chips" id="areaunits"></div>
+    <h3>Lengths, perimeter and radius</h3>
+    <div class="chips" id="lenunits"></div>
+    <p class="note">Auto shows square feet under half an acre and acres above it (or m² and hectares). Tap the big number on the main screen to cycle units without opening this sheet. The Details table always lists every unit.</p>
+  </div>
+</div>
+
+<!-- Circle radius sheet -->
+<div class="modal" id="circlemodal" role="dialog" aria-modal="true" aria-labelledby="circletitle">
+  <div class="card">
+    <h2 id="circletitle">Circle radius <button data-close="circlemodal">Done</button></h2>
+    <div class="field"><label for="radiusin">Radius (<span id="radiusunit">ft</span>)</label><input id="radiusin" type="number" inputmode="decimal" step="any"></div>
+    <p class="note">Or drag the handle on the map edge to resize.</p>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+(function(){
+'use strict';
+/* ---------- constants & storage ---------- */
+const HQ=[49.6957,-112.8452];                // JB Lines, Lethbridge
+const KEY='jb-areamap-v1';
+const FT=3.280839895, SQFT=10.76391041671, ACRE_M2=4046.8564224, HA_M2=10000, SQYD_M2=1.1959900463;
+let store={saved:[],settings:{units:'imperial',layer:'sat',rates:null}};
+try{const s=JSON.parse(localStorage.getItem(KEY)||'null'); if(s&&s.saved) store=Object.assign(store,s);}catch(e){}
+function persist(){try{localStorage.setItem(KEY,JSON.stringify(store));}catch(e){}}
+const DEFAULT_RATES={sealGal:90,sealCoats:2,asphaltMm:50,asphaltDens:2.4,gravelMm:150,gravelDens:2.2,concreteMm:100,crackLbPer100:9,paintFtPerGal:320,stallWidthFt:9};
+const rates=Object.assign({},DEFAULT_RATES,store.settings.rates||{});
+
+/* ---------- geodesy ---------- */
+const R=6378137, R2=6371008.8, rad=d=>d*Math.PI/180;
+function ringArea(pts){ // pts: [{lat,lng}], geodesic area (Chamberlain & Duquette, same as Turf)
+  const n=pts.length; if(n<3) return 0; let t=0;
+  for(let i=0;i<n;i++){const a=pts[i],b=pts[(i+1)%n],c=pts[(i+2)%n]; t+=(rad(c.lng)-rad(a.lng))*Math.sin(rad(b.lat));}
+  return Math.abs(t*R*R/2);
+}
+function dist(a,b){ // haversine metres
+  const dLat=rad(b.lat-a.lat), dLng=rad(b.lng-a.lng);
+  const h=Math.sin(dLat/2)**2+Math.cos(rad(a.lat))*Math.cos(rad(b.lat))*Math.sin(dLng/2)**2;
+  return 2*R2*Math.asin(Math.min(1,Math.sqrt(h)));
+}
+function pathLen(pts,close){let s=0;for(let i=1;i<pts.length;i++)s+=dist(pts[i-1],pts[i]); if(close&&pts.length>2)s+=dist(pts[pts.length-1],pts[0]); return s;}
+function bearing(a,b){const y=Math.sin(rad(b.lng-a.lng))*Math.cos(rad(b.lat)); const x=Math.cos(rad(a.lat))*Math.sin(rad(b.lat))-Math.sin(rad(a.lat))*Math.cos(rad(b.lat))*Math.cos(rad(b.lng-a.lng)); return (Math.atan2(y,x)*180/Math.PI+360)%360;}
+function destination(a,brg,d){const δ=d/R2,θ=rad(brg),φ1=rad(a.lat),λ1=rad(a.lng);
+  const φ2=Math.asin(Math.sin(φ1)*Math.cos(δ)+Math.cos(φ1)*Math.sin(δ)*Math.cos(θ));
+  const λ2=λ1+Math.atan2(Math.sin(θ)*Math.sin(δ)*Math.cos(φ1),Math.cos(δ)-Math.sin(φ1)*Math.sin(φ2));
+  return {lat:φ2*180/Math.PI,lng:((λ2*180/Math.PI)+540)%360-180};}
+function mid(a,b){return {lat:(a.lat+b.lat)/2,lng:(a.lng+b.lng)/2};}
+function centroid(pts){if(!pts.length)return null;let x=0,y=0;pts.forEach(p=>{x+=p.lat;y+=p.lng});return {lat:x/pts.length,lng:y/pts.length};}
+
+/* ---------- formatting ---------- */
+if(!store.settings.areaUnit) store.settings.areaUnit=store.settings.units==='metric'?'auto-met':'auto-imp';
+if(!store.settings.lengthUnit) store.settings.lengthUnit='auto';
+const AREA_UNITS=[['auto-imp','Auto · ft / acres','ft · ac'],['sqft','Square feet','sq ft'],['sqyd','Square yards','sq yd'],['ac','Acres','acres'],['auto-met','Auto · m² / ha','m² · ha'],['m2','Square metres','m²'],['ha','Hectares','ha']];
+const LEN_UNITS=[['auto','Auto','auto'],['ft','Feet','ft'],['yd','Yards','yd'],['m','Metres','m']];
+const imperial=()=>!['auto-met','m2','ha'].includes(store.settings.areaUnit);
+const lenImperial=()=>{const u=store.settings.lengthUnit; return u==='auto'?imperial():u!=='m';};
+const nf=(v,d)=>v.toLocaleString(undefined,{maximumFractionDigits:d,minimumFractionDigits:0});
+function fmtLen(m){ const u=store.settings.lengthUnit; if(u==='yd'){const y=m*FT/3; return nf(y,y<100?1:0)+' yd';}
+  if(u==='ft'||(u==='auto'&&imperial())){const f=m*FT; return f>=5280? nf(f/5280,2)+' mi' : nf(f,f<100?1:0)+' ft';} return m>=2000? nf(m/1000,2)+' km' : nf(m,m<100?1:0)+' m'; }
+function areaPrimary(m2){ const u=store.settings.areaUnit; // fixed unit, or Auto picks the clearest one like AreaMap
+  if(u==='sqft') return [nf(m2*SQFT,0),'sq ft']; if(u==='sqyd') return [nf(m2*SQYD_M2,0),'sq yd']; if(u==='ac') return [nf(m2/ACRE_M2,m2/ACRE_M2<10?3:2),'acres'];
+  if(u==='m2') return [nf(m2,0),'m²']; if(u==='ha') return [nf(m2/HA_M2,m2/HA_M2<10?3:2),'ha'];
+  if(u==='auto-imp'){ if(m2<ACRE_M2*0.5) return [nf(m2*SQFT,0),'sq ft']; return [nf(m2/ACRE_M2,m2/ACRE_M2<10?3:2),'acres']; }
+  if(m2<HA_M2*0.5) return [nf(m2,0),'m²']; return [nf(m2/HA_M2,m2/HA_M2<10?3:2),'ha'];
+}
+function areaSecondary(m2){ const p=areaPrimary(m2)[1];
+  const all={'sq ft':nf(m2*SQFT,0)+' sq ft','acres':nf(m2/ACRE_M2,3)+' acres','sq yd':nf(m2*SQYD_M2,0)+' sq yd','m²':nf(m2,0)+' m²','ha':nf(m2/HA_M2,3)+' ha'};
+  const order=imperial()?['sq ft','acres','sq yd']:['m²','ha','sq ft']; return order.filter(u=>u!==p).slice(0,2).map(u=>all[u]).join(' · '); }
+
+/* ---------- map ---------- */
+const map=L.map('map',{zoomControl:false,attributionControl:true,tap:false,doubleClickZoom:false,maxZoom:21}).setView(HQ,17);
+const sat=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:21,maxNativeZoom:19,attribution:'Imagery © Esri, Maxar, Earthstar Geographics'});
+const streets=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:21,maxNativeZoom:19,attribution:'© OpenStreetMap'});
+const hybridLabels=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',{maxZoom:21,maxNativeZoom:19,opacity:.9});
+let layerMode=store.settings.layer||'sat';
+function applyLayer(){ [sat,streets,hybridLabels].forEach(l=>map.removeLayer(l)); if(layerMode==='streets'){streets.addTo(map);} else {sat.addTo(map); if(layerMode==='hybrid') hybridLabels.addTo(map);} }
+applyLayer();
+document.getElementById('layerbtn').onclick=()=>{layerMode=layerMode==='sat'?'hybrid':layerMode==='hybrid'?'streets':'sat'; store.settings.layer=layerMode; persist(); applyLayer(); toast(layerMode==='sat'?'Satellite':layerMode==='hybrid'?'Satellite + labels':'Streets');};
+L.control.scale({imperial:true,metric:true,position:'bottomright'}).addTo(map);
+const shapeLayer=L.layerGroup().addTo(map), handleLayer=L.layerGroup().addTo(map), labelLayer=L.layerGroup().addTo(map), savedLayer=L.layerGroup().addTo(map);
+
+/* ---------- state ---------- */
+let tool='area';                 // area | distance | circle | marker | walk
+let pts=[];                      // vertices {lat,lng}
+let circle={center:null,radius:0};
+let undoStack=[],redoStack=[];
+let showSaved=false, lastFix=null, watchId=null, walking=false, wakeLock=null;
+let fmt='summary';
+const $=id=>document.getElementById(id);
+
+function snapshot(){return JSON.stringify({pts,circle});}
+function pushUndo(){undoStack.push(snapshot()); if(undoStack.length>100)undoStack.shift(); redoStack=[]; }
+function restore(s){const o=JSON.parse(s); pts=o.pts; circle=o.circle; render();}
+$('undobtn').onclick=()=>{if(!undoStack.length)return; redoStack.push(snapshot()); restore(undoStack.pop());};
+$('redobtn').onclick=()=>{if(!redoStack.length)return; undoStack.push(snapshot()); restore(redoStack.pop());};
+$('clearbtn').onclick=()=>{ if(!pts.length&&!circle.center)return; pushUndo(); pts=[]; circle={center:null,radius:0}; if(walking)stopWalk(false); render(); toast('Cleared'); };
+
+/* ---------- tools ---------- */
+document.querySelectorAll('.tool').forEach(b=>b.onclick=()=>setTool(b.dataset.tool));
+function setTool(t){
+  if(t==='walk'){ if(walking){stopWalk(true);return;} startWalk(); return; }
+  if(walking) stopWalk(false);
+  if(t!==tool && (pts.length||circle.center)){ pushUndo(); pts=[]; circle={center:null,radius:0}; }
+  tool=t; document.querySelectorAll('.tool').forEach(b=>{const on=b.dataset.tool===t; b.classList.toggle('on',on); b.setAttribute('aria-selected',on);});
+  render();
+}
+map.on('click',e=>{
+  if(walking) return;
+  const p={lat:e.latlng.lat,lng:e.latlng.lng};
+  if(tool==='circle'){ pushUndo(); if(!circle.center){circle={center:p,radius:0}; toast('Tap the edge or set a radius');} else { circle.radius=dist(circle.center,p);} render(); if(circle.radius>0) openCircleSheet(); return; }
+  if(tool==='marker'){ pushUndo(); pts=[p]; render(); return; }
+  pushUndo(); pts.push(p); render();
+});
+map.on('zoomend',render);
+
+/* ---------- walk mode (GPS) ---------- */
+function startWalk(){
+  if(!navigator.geolocation){toast('GPS not available in this browser');return;}
+  if(tool!=='area'&&tool!=='distance'){tool='area';}
+  if(pts.length){pushUndo(); pts=[];}
+  circle={center:null,radius:0};
+  walking=true; document.querySelector('.tool.walk').classList.add('on');
+  requestWake();
+  watchId=navigator.geolocation.watchPosition(pos=>{
+    const c=pos.coords, p={lat:c.latitude,lng:c.longitude}; lastFix={p,acc:c.accuracy,t:Date.now()}; drawMe();
+    $('gpsdot').style.display='block'; $('gpsdot').style.background=c.accuracy<=10?'#2fbf4f':c.accuracy<=25?'#e0a800':'#b3261e';
+    if(c.accuracy>30){ hint('Waiting for better GPS ('+Math.round(c.accuracy)+' m)'); return; }
+    const last=pts[pts.length-1]; const minMove=Math.max(2,c.accuracy/3);
+    if(!last||dist(last,p)>=minMove){ pts.push(p); render(); map.panTo(p,{animate:false}); }
+    hint('Walking · ±'+Math.round(c.accuracy)+' m · '+pts.length+' points · tap Walk to finish');
+  },err=>{toast(err.code===1?'Location permission denied. Allow it in Settings › Safari › Location.':'GPS error: '+err.message); stopWalk(false);},
+  {enableHighAccuracy:true,maximumAge:0,timeout:20000});
+  hint('Walk the boundary · getting GPS fix…');
+  toast('Keep the screen on while walking. The web can’t track with the screen locked.');
+}
+function stopWalk(finish){
+  walking=false; if(watchId!=null){navigator.geolocation.clearWatch(watchId);watchId=null;}
+  document.querySelector('.tool.walk').classList.remove('on'); releaseWake();
+  if(finish){ // drop a trailing point that returned to start within 5 m, then close
+    if(pts.length>3&&dist(pts[0],pts[pts.length-1])<5) pts.pop();
+    if(pts.length>=3){tool='area';} else {tool='distance';}
+    document.querySelectorAll('.tool').forEach(b=>b.classList.toggle('on',b.dataset.tool===tool));
+    if(pts.length>=2) map.fitBounds(L.latLngBounds(pts.map(p=>[p.lat,p.lng])).pad(.3));
+    toast('Walk finished · '+pts.length+' points');
+  }
+  render();
+}
+async function requestWake(){try{if('wakeLock' in navigator){wakeLock=await navigator.wakeLock.request('screen'); wakeLock.addEventListener('release',()=>{wakeLock=null;});}}catch(e){}}
+function releaseWake(){try{wakeLock&&wakeLock.release();}catch(e){} wakeLock=null;}
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&walking&&!wakeLock)requestWake();});
+let meMarker=null,meCircle=null;
+function drawMe(){ if(!lastFix)return; const ll=[lastFix.p.lat,lastFix.p.lng];
+  if(!meMarker){meMarker=L.marker(ll,{icon:L.divIcon({className:'vtx me'}),interactive:false,zIndexOffset:900}).addTo(map); meCircle=L.circle(ll,{radius:lastFix.acc,color:'#36c6ff',weight:1,fillOpacity:.1,interactive:false}).addTo(map);}
+  else {meMarker.setLatLng(ll); meCircle.setLatLng(ll); meCircle.setRadius(lastFix.acc);} }
+$('locbtn').onclick=()=>{
+  if(!navigator.geolocation){toast('GPS not available');return;}
+  $('locbtn').classList.add('on');
+  navigator.geolocation.getCurrentPosition(pos=>{const c=pos.coords; lastFix={p:{lat:c.latitude,lng:c.longitude},acc:c.accuracy,t:Date.now()}; drawMe(); map.setView([c.latitude,c.longitude],Math.max(map.getZoom(),18)); $('locbtn').classList.remove('on'); toast('Accuracy ±'+Math.round(c.accuracy)+' m');},
+    err=>{$('locbtn').classList.remove('on'); toast(err.code===1?'Location permission denied. Allow it in Settings › Safari › Location.':'Could not get location: '+err.message);},
+    {enableHighAccuracy:true,timeout:15000,maximumAge:5000});
+};
+
+/* ---------- rendering ---------- */
+function render(){
+  shapeLayer.clearLayers(); handleLayer.clearLayers(); labelLayer.clearLayers();
+  const style={color:'#ffd23f',weight:3,fillColor:'#ffd23f',fillOpacity:.2,interactive:false};
+  const z=map.getZoom(); const showLabels=z>=16;
+  let m2=0,len=0;
+  if(tool==='circle'){
+    if(circle.center){ if(circle.radius>0){ L.circle(circle.center,Object.assign({radius:circle.radius},style)).addTo(shapeLayer); m2=Math.PI*circle.radius*circle.radius; len=2*Math.PI*circle.radius;
+        const edge=destination(circle.center,90,circle.radius);
+        const h=L.marker(edge,{icon:L.divIcon({className:'vtx'}),draggable:true,zIndexOffset:500}).addTo(handleLayer);
+        h.on('dragstart',()=>pushUndo()); h.on('drag',e=>{circle.radius=dist(circle.center,e.target.getLatLng()); renderReadout(Math.PI*circle.radius**2,2*Math.PI*circle.radius); }); h.on('dragend',render);
+        L.marker([circle.center.lat,circle.center.lng],{icon:L.divIcon({className:'arealabel',html:'r '+fmtLen(circle.radius)}),interactive:false}).addTo(labelLayer);
+      }
+      const c=L.marker(circle.center,{icon:L.divIcon({className:'vtx first'}),draggable:true,zIndexOffset:600}).addTo(handleLayer);
+      c.on('dragstart',()=>pushUndo()); c.on('drag',e=>{circle.center=e.target.getLatLng(); }); c.on('dragend',render);
+    }
+  } else if(tool==='marker'){
+    if(pts[0]){ const mk=L.marker(pts[0],{draggable:true}).addTo(handleLayer); mk.on('dragstart',()=>pushUndo()); mk.on('dragend',e=>{pts[0]=e.target.getLatLng(); render();}); }
+  } else {
+    const closed=tool==='area'&&pts.length>=3;
+    if(pts.length>=2){ (closed?L.polygon(pts,style):L.polyline(pts,Object.assign({},style,{fill:false}))).addTo(shapeLayer); }
+    if(closed) m2=ringArea(pts); len=pathLen(pts,closed);
+    pts.forEach((p,i)=>{
+      const mk=L.marker(p,{icon:L.divIcon({className:'vtx'+(i===0?' first':'')}),draggable:true,zIndexOffset:500}).addTo(handleLayer);
+      mk.on('dragstart',()=>pushUndo());
+      mk.on('drag',e=>{pts[i]=e.target.getLatLng(); liveShape(); });
+      mk.on('dragend',render);
+      mk.on('click',()=>{ if(i===0&&tool==='area'&&pts.length>=3){toast('Shape is closed');return;} pushUndo(); pts.splice(i,1); render(); toast('Point removed'); });
+    });
+    // midpoint handles insert a vertex
+    if(pts.length>=2){ const segs=pts.length-(closed?0:1);
+      for(let i=0;i<segs;i++){ const a=pts[i],b=pts[(i+1)%pts.length], m=mid(a,b);
+        const h=L.marker(m,{icon:L.divIcon({className:'vtx mid'}),draggable:true,zIndexOffset:400}).addTo(handleLayer);
+        h.on('dragstart',()=>{pushUndo(); pts.splice(i+1,0,m); h._idx=i+1;}); h.on('drag',e=>{pts[h._idx]=e.target.getLatLng(); liveShape();}); h.on('dragend',render);
+        h.on('click',()=>{pushUndo(); pts.splice(i+1,0,m); render();});
+        if(showLabels) L.marker(m,{icon:L.divIcon({className:'seglabel',html:'<span>'+fmtLen(dist(a,b))+'</span>'}),interactive:false}).addTo(labelLayer);
+      } }
+    if(closed&&showLabels){ const c=centroid(pts); const a=areaPrimary(m2); L.marker(c,{icon:L.divIcon({className:'arealabel',html:a[0]+' '+a[1]}),interactive:false}).addTo(labelLayer); }
+  }
+  renderReadout(m2,len);
+  $('undobtn').disabled=!undoStack.length; $('redobtn').disabled=!redoStack.length;
+  const has=pts.length>0||!!circle.center; $('clearbtn').disabled=!has; $('savebtn').disabled=!(tool==='area'?m2>0:tool==='distance'?len>0:tool==='circle'?m2>0:pts.length>0);
+  hint(tool==='area'?(pts.length<3?'Tap the corners of the area ('+pts.length+'/3 minimum)':'Drag points to adjust · tap a point to remove · tap a small handle to add'):
+       tool==='distance'?(pts.length<2?'Tap along the line to measure':'Drag points to adjust · tap a point to remove'):
+       tool==='circle'?(circle.center?'Drag the edge handle to resize':'Tap the centre of the circle'):
+       tool==='marker'?(pts.length?'Drag to move the marker':'Tap to drop a marker'):'');
+  if(walking) hint('Walking · '+pts.length+' points · tap Walk to finish');
+  layoutSheet();
+}
+function liveShape(){ shapeLayer.clearLayers(); const closed=tool==='area'&&pts.length>=3; const style={color:'#ffd23f',weight:3,fillColor:'#ffd23f',fillOpacity:.2,interactive:false};
+  if(pts.length>=2)(closed?L.polygon(pts,style):L.polyline(pts,Object.assign({},style,{fill:false}))).addTo(shapeLayer); renderReadout(closed?ringArea(pts):0,pathLen(pts,closed)); }
+function renderReadout(m2,len){
+  const big=$('big'),sub=$('sub');
+  if(tool==='marker'){ if(pts[0]){big.innerHTML=pts[0].lat.toFixed(5)+', '+pts[0].lng.toFixed(5); big.style.fontSize='22px'; sub.textContent='Marker · tap Details for more';} else {big.innerHTML='Marker'; big.style.fontSize='34px'; sub.textContent='Tap the map to drop a marker';} }
+  else if(tool==='distance'){ big.style.fontSize='34px'; const t=fmtLen(len).split(' '); big.innerHTML=(len?t[0]:'0')+'<small>'+(len?t[1]:(lenImperial()?'ft':'m'))+'</small>'; sub.textContent=pts.length<2?'Tap along the line to measure':pts.length+' points · '+(lenImperial()?nf(len,1)+' m':nf(len*FT,1)+' ft'); }
+  else { big.style.fontSize='34px'; const a=areaPrimary(m2); big.innerHTML=a[0]+'<small>'+a[1]+'</small>';
+    sub.textContent=m2?areaSecondary(m2)+' · perimeter '+fmtLen(len):(tool==='circle'?'Tap the centre, then the edge':(pts.length?'Add '+Math.max(0,3-pts.length)+' more point'+(3-pts.length===1?'':'s')+(len?' · '+fmtLen(len):''):'Tap the map to place the first corner')); }
+  renderDetails(m2,len);
+}
+function renderDetails(m2,len){
+  const kv=$('kv'); const rows=[];
+  if(m2>0){ rows.push(['Square feet',nf(m2*SQFT,0)],['Square yards',nf(m2*SQYD_M2,0)],['Square metres',nf(m2,1)],['Acres',nf(m2/ACRE_M2,4)],['Hectares',nf(m2/HA_M2,4)]); }
+  if(len>0) rows.push([m2>0?'Perimeter':'Length',nf(len*FT,1)+' ft · '+nf(len,1)+' m']);
+  if(tool==='circle'&&circle.radius) rows.push(['Radius',nf(circle.radius*FT,1)+' ft · '+nf(circle.radius,1)+' m']);
+  if(pts.length) rows.push(['Points',pts.length]);
+  if(pts.length===1||(tool==='marker'&&pts[0])) rows.push(['Coordinates',pts[0].lat.toFixed(6)+', '+pts[0].lng.toFixed(6)]);
+  if(tool==='circle'&&circle.center) rows.push(['Centre',circle.center.lat.toFixed(6)+', '+circle.center.lng.toFixed(6)]);
+  kv.innerHTML=rows.map(r=>'<tr><td>'+r[0]+'</td><td>'+r[1]+'</td></tr>').join('')||'<tr><td colspan="2" style="color:var(--muted)">Nothing measured yet</td></tr>';
+  const est=$('estimates'); const sqft=m2*SQFT, ft=len*FT; const lines=[];
+  const row=(label,key,unit,calc,outUnit)=>lines.push('<div class="est"><span>'+label+'</span><span><input type="number" inputmode="decimal" step="any" data-rate="'+key+'" value="'+rates[key]+'" aria-label="'+label+' rate"> <span class="u">'+unit+'</span></span><b>'+calc+' <span class="u">'+outUnit+'</span></b></div>');
+  if(m2>0){
+    row('Sealcoat coverage','sealGal','sq ft/gal/coat',nf(sqft/rates.sealGal*rates.sealCoats,0),'gal');
+    row('Sealcoat coats','sealCoats','coats',nf(sqft/rates.sealGal*rates.sealCoats/5,0),'pails (5 gal)');
+    row('Asphalt thickness','asphaltMm','mm',nf(m2*rates.asphaltMm/1000*rates.asphaltDens,1),'tonnes');
+    row('Asphalt density','asphaltDens','t/m³',nf(m2*rates.asphaltMm/1000*rates.asphaltDens*1.1,1),'t +10% waste');
+    row('Gravel base depth','gravelMm','mm',nf(m2*rates.gravelMm/1000*rates.gravelDens,1),'tonnes');
+    row('Concrete thickness','concreteMm','mm',nf(m2*rates.concreteMm/1000,2)+' m³ · '+nf(m2*rates.concreteMm/1000*1.30795,2),'yd³');
+    row('Stall width','stallWidthFt','ft',nf(Math.floor(Math.sqrt(sqft)/rates.stallWidthFt),0),'stalls per √side (rough)');
+  }
+  if(len>0&&m2===0){
+    row('Crack sealant','crackLbPer100','lb/100 ft',nf(ft/100*rates.crackLbPer100,0)+' lb · '+nf(ft/100*rates.crackLbPer100/30,1),'boxes (30 lb)');
+    row('Striping paint','paintFtPerGal','ft/gal (4″ line)',nf(ft/rates.paintFtPerGal,1),'gal');
+  }
+  est.innerHTML=lines.join(''); $('esthead').style.display=lines.length?'':'none';
+  est.querySelectorAll('input').forEach(inp=>inp.onchange=()=>{const v=parseFloat(inp.value); if(v>0){rates[inp.dataset.rate]=v; store.settings.rates=rates; persist(); renderDetails(m2,len);}});
+}
+let hintTimer; function hint(t){const h=$('hint'); if(!t){h.style.display='none';return;} h.style.display='block'; h.textContent=t;}
+let toastTimer; function toast(t){const el=$('toast'); el.textContent=t; el.classList.add('show'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>el.classList.remove('show'),2600);}
+function layoutSheet(){ const h=$('sheet').offsetHeight; document.documentElement.style.setProperty('--sheet-h',h+'px'); }
+new ResizeObserver(layoutSheet).observe($('sheet'));
+
+/* units */
+function unitLabel(){ const a=AREA_UNITS.find(x=>x[0]===store.settings.areaUnit)||AREA_UNITS[0]; const l=store.settings.lengthUnit; return a[2]+(l!=='auto'?' · '+l:''); }
+function refreshUnitUI(){ $('unitbtn').textContent=unitLabel(); document.querySelectorAll('#areaunits .chip').forEach(c=>c.classList.toggle('on',c.dataset.u===store.settings.areaUnit)); document.querySelectorAll('#lenunits .chip').forEach(c=>c.classList.toggle('on',c.dataset.u===store.settings.lengthUnit)); }
+$('areaunits').innerHTML=AREA_UNITS.map(u=>'<button class="chip" data-u="'+u[0]+'">'+u[1]+'</button>').join('');
+$('lenunits').innerHTML=LEN_UNITS.map(u=>'<button class="chip" data-u="'+u[0]+'">'+u[1]+'</button>').join('');
+document.querySelectorAll('#areaunits .chip').forEach(c=>c.onclick=()=>{store.settings.areaUnit=c.dataset.u; persist(); refreshUnitUI(); render();});
+document.querySelectorAll('#lenunits .chip').forEach(c=>c.onclick=()=>{store.settings.lengthUnit=c.dataset.u; persist(); refreshUnitUI(); render();});
+$('unitbtn').onclick=()=>openModal('unitsmodal');
+$('big').onclick=()=>{ if(tool==='marker')return; if(tool==='distance'){ const o=LEN_UNITS.map(u=>u[0]).filter(u=>u!=='auto'); const cur=store.settings.lengthUnit==='auto'?(imperial()?'ft':'m'):store.settings.lengthUnit; store.settings.lengthUnit=o[(o.indexOf(cur)+1)%o.length]; }
+  else { const o=AREA_UNITS.map(u=>u[0]); store.settings.areaUnit=o[(o.indexOf(store.settings.areaUnit)+1)%o.length]; }
+  persist(); refreshUnitUI(); render(); toast('Units: '+unitLabel()); };
+refreshUnitUI();
+$('detailsbtn').onclick=()=>{$('sheet').classList.toggle('open'); $('detailsbtn').textContent=$('sheet').classList.contains('open')?'Hide':'Details'; layoutSheet();};
+let touchY=null; $('sheet').addEventListener('touchstart',e=>{touchY=e.touches[0].clientY},{passive:true});
+$('sheet').addEventListener('touchend',e=>{ if(touchY==null)return; const dy=e.changedTouches[0].clientY-touchY; touchY=null; if(Math.abs(dy)>50&&e.target.closest('#grab,#readout')){ $('sheet').classList.toggle('open',dy<0); $('detailsbtn').textContent=$('sheet').classList.contains('open')?'Hide':'Details'; layoutSheet(); } },{passive:true});
+
+/* ---------- circle radius sheet ---------- */
+function openCircleSheet(){ $('radiusunit').textContent=lenImperial()?'ft':'m'; $('radiusin').value=lenImperial()?Math.round(circle.radius*FT*10)/10:Math.round(circle.radius*10)/10; openModal('circlemodal'); }
+$('radiusin').oninput=()=>{const v=parseFloat($('radiusin').value); if(v>0&&circle.center){circle.radius=lenImperial()?v/FT:v; render();}};
+
+/* ---------- search ---------- */
+const search=$('search'),results=$('results'); let searchTimer;
+search.oninput=()=>{ $('searchclear').hidden=!search.value; clearTimeout(searchTimer); const q=search.value.trim(); if(q.length<3){results.hidden=true;return;}
+  const m=q.match(/^\s*(-?\d{1,2}(?:\.\d+)?)\s*[, ]\s*(-?\d{1,3}(?:\.\d+)?)\s*$/); if(m){showResults([{name:'Coordinates '+m[1]+', '+m[2],sub:'Go to point',lat:+m[1],lng:+m[2]}]);return;}
+  searchTimer=setTimeout(()=>geocode(q),450); };
+search.onkeydown=e=>{if(e.key==='Enter'){clearTimeout(searchTimer); const q=search.value.trim(); if(q)geocode(q,true); search.blur();}};
+$('searchclear').onclick=()=>{search.value=''; $('searchclear').hidden=true; results.hidden=true; search.focus();};
+async function geocode(q,go){
+  try{ const c=map.getCenter(); const url='https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&addressdetails=0&q='+encodeURIComponent(q)+'&viewbox='+(c.lng-2)+','+(c.lat+1.5)+','+(c.lng+2)+','+(c.lat-1.5);
+    const r=await fetch(url,{headers:{'Accept':'application/json'}}); const j=await r.json();
+    const list=j.map(x=>({name:x.name||x.display_name.split(',')[0],sub:x.display_name,lat:+x.lat,lng:+x.lon,bbox:x.boundingbox}));
+    if(!list.length){showResults([{name:'No results',sub:'Try a street address or coordinates'}]);return;}
+    if(go){goTo(list[0]);} else showResults(list);
+  }catch(e){ showResults([{name:'Search unavailable',sub:'Check your connection'}]); }
+}
+function showResults(list){ results.innerHTML=''; list.forEach(it=>{const b=document.createElement('button'); b.innerHTML='<span></span><small></small>'; b.firstChild.textContent=it.name; b.lastChild.textContent=it.sub||''; if(it.lat!=null)b.onclick=()=>goTo(it); results.appendChild(b);}); results.hidden=false; }
+function goTo(it){ results.hidden=true; search.value=it.name; $('searchclear').hidden=false;
+  if(it.bbox){ const b=it.bbox.map(Number); const bounds=L.latLngBounds([b[0],b[2]],[b[1],b[3]]); const span=Math.max(bounds.getNorth()-bounds.getSouth(),bounds.getEast()-bounds.getWest()); if(span<0.01) map.setView([it.lat,it.lng],18); else map.fitBounds(bounds,{maxZoom:18}); }
+  else map.setView([it.lat,it.lng],18); toast(it.name); }
+document.addEventListener('click',e=>{if(!e.target.closest('#searchwrap'))results.hidden=true;});
+
+/* ---------- save / list ---------- */
+function openModal(id){$(id).classList.add('show');} function closeModal(id){$(id).classList.remove('show');}
+document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>closeModal(b.dataset.close));
+document.querySelectorAll('.modal').forEach(m=>m.addEventListener('click',e=>{if(e.target===m)m.classList.remove('show');}));
+function currentRecord(){
+  const closed=tool==='area'&&pts.length>=3; let m2=0,len=0;
+  if(tool==='circle'){m2=Math.PI*circle.radius**2;len=2*Math.PI*circle.radius;} else if(tool!=='marker'){ if(closed)m2=ringArea(pts); len=pathLen(pts,closed); }
+  return {type:tool==='walk'?'area':tool,pts:pts.map(p=>({lat:+p.lat.toFixed(7),lng:+p.lng.toFixed(7)})),circle:tool==='circle'?{center:circle.center,radius:circle.radius}:null,m2,len};
+}
+$('savebtn').onclick=()=>{ $('savename').value=''; $('savegroup').value=store.settings.lastGroup||''; $('savenotes').value='';
+  $('grouplist').innerHTML=[...new Set(store.saved.map(s=>s.group).filter(Boolean))].map(g=>'<option value="'+esc(g)+'">').join(''); openModal('savemodal'); setTimeout(()=>$('savename').focus(),50); };
+$('savecommit').onclick=()=>{ const rec=currentRecord(); rec.id=Date.now().toString(36); rec.name=$('savename').value.trim()||(rec.type[0].toUpperCase()+rec.type.slice(1)+' '+new Date().toLocaleDateString()); rec.group=$('savegroup').value.trim(); rec.notes=$('savenotes').value.trim(); rec.savedAt=new Date().toISOString();
+  store.saved.unshift(rec); store.settings.lastGroup=rec.group; persist(); closeModal('savemodal'); toast('Saved “'+rec.name+'”'); if(showSaved)drawSaved(); syncToSheet(rec); };
+let groupFilter='';
+$('savedbtn').onclick=()=>{renderList(); openModal('listmodal');};
+function renderList(){
+  const groups=[...new Set(store.saved.map(s=>s.group||'Ungrouped'))]; const chips=$('groupchips'); chips.innerHTML='';
+  if(groups.length>1){ ['All',...groups].forEach(g=>{const b=document.createElement('button'); b.className='chip'+((g==='All'?'':g)===groupFilter?' on':''); b.textContent=g; b.onclick=()=>{groupFilter=g==='All'?'':g; renderList();}; chips.appendChild(b);}); }
+  const list=$('savedlist'); list.innerHTML='';
+  const items=store.saved.filter(s=>!groupFilter||(s.group||'Ungrouped')===groupFilter);
+  if(!items.length){list.innerHTML='<div class="empty">No saved measurements yet.<br>Measure something and tap Save.</div>'; return;}
+  let lastG=null; items.forEach(s=>{ const g=s.group||'Ungrouped'; if(g!==lastG&&!groupFilter){const h=document.createElement('div');h.className='group';h.textContent=g;list.appendChild(h);lastG=g;}
+    const d=document.createElement('div'); d.className='saveditem'; const a=s.m2?areaPrimary(s.m2):null;
+    d.innerHTML='<span class="sw"></span><div class="t"><b></b><span></span></div><button class="load">Open</button><button class="del">Delete</button>';
+    d.querySelector('b').textContent=s.name; d.querySelector('.t span').textContent=(a?a[0]+' '+a[1]+' · ':'')+(s.len?fmtLen(s.len)+' · ':'')+new Date(s.savedAt).toLocaleDateString()+(s.notes?' · '+s.notes:'');
+    d.querySelector('.load').onclick=()=>{loadRecord(s); closeModal('listmodal');};
+    d.querySelector('.del').onclick=()=>{ if(d.dataset.confirm){store.saved=store.saved.filter(x=>x.id!==s.id); persist(); renderList(); if(showSaved)drawSaved(); toast('Deleted');} else {d.dataset.confirm='1'; d.querySelector('.del').textContent='Confirm'; setTimeout(()=>{delete d.dataset.confirm; d.querySelector('.del').textContent='Delete';},2500);} };
+    list.appendChild(d); });
+}
+function loadRecord(s){ pushUndo(); tool=s.type; document.querySelectorAll('.tool').forEach(b=>b.classList.toggle('on',b.dataset.tool===tool)); pts=s.pts.map(p=>({lat:p.lat,lng:p.lng})); circle=s.circle?{center:s.circle.center,radius:s.circle.radius}:{center:null,radius:0};
+  render(); const ll=s.circle?[s.circle.center]:pts; if(ll.length>1) map.fitBounds(L.latLngBounds(ll.map(p=>[p.lat,p.lng])).pad(.3)); else if(ll.length) map.setView(ll[0],18); if(s.circle) map.setView(s.circle.center,17); toast('Opened “'+s.name+'”'); }
+$('showsaved').onclick=()=>{showSaved=!showSaved; $('showsaved').textContent=showSaved?'Hide on map':'Show on map'; drawSaved(); closeModal('listmodal');};
+function drawSaved(){ savedLayer.clearLayers(); if(!showSaved)return; store.saved.forEach(s=>{ const st={color:'#8fd3ff',weight:2,fillOpacity:.08,dashArray:'4 4'}; let l;
+  if(s.circle) l=L.circle(s.circle.center,Object.assign({radius:s.circle.radius},st)); else if(s.type==='area'&&s.pts.length>=3) l=L.polygon(s.pts,st); else if(s.pts.length>=2) l=L.polyline(s.pts,st); else if(s.pts.length) l=L.circleMarker(s.pts[0],{radius:6,color:'#8fd3ff'});
+  if(l){ l.bindTooltip(s.name,{permanent:true,direction:'center',className:'savedlabel'}); l.on('click',()=>loadRecord(s)); l.addTo(savedLayer);} }); }
+
+/* ---------- export ---------- */
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function recsForExport(){ return exportAll? store.saved : [Object.assign(currentRecord(),{name:$('savename').value||'Current measurement',group:'',notes:'',savedAt:new Date().toISOString()})]; }
+let exportAll=false;
+function recGeom(s){ if(s.circle){ const ring=[]; for(let b=0;b<360;b+=6) ring.push(destination(s.circle.center,b,s.circle.radius)); return {kind:'Polygon',ring}; }
+  if(s.type==='area'&&s.pts.length>=3) return {kind:'Polygon',ring:s.pts}; if(s.pts.length>=2) return {kind:'LineString',ring:s.pts}; return {kind:'Point',ring:s.pts}; }
+function summaryText(s){ const a=s.m2?areaPrimary(s.m2):null; const c=s.circle?s.circle.center:centroid(s.pts);
+  return [s.name+(s.group?' ('+s.group+')':''), s.m2?('Area: '+nf(s.m2*SQFT,0)+' sq ft · '+nf(s.m2*SQYD_M2,0)+' sq yd · '+nf(s.m2,0)+' m² · '+nf(s.m2/ACRE_M2,3)+' ac · '+nf(s.m2/HA_M2,3)+' ha'):'', s.len?((s.m2?'Perimeter: ':'Length: ')+nf(s.len*FT,0)+' ft · '+nf(s.len,0)+' m'):'', s.circle?('Radius: '+nf(s.circle.radius*FT,1)+' ft'):'', c?('Centre: '+c.lat.toFixed(6)+', '+c.lng.toFixed(6)+'  https://maps.google.com/?q='+c.lat.toFixed(6)+','+c.lng.toFixed(6)):'', s.notes?('Notes: '+s.notes):'', 'Measured '+new Date(s.savedAt).toLocaleString()+' with JB AreaMap (not a legal survey)'].filter(Boolean).join('\n'); }
+function buildExport(f){ const recs=recsForExport();
+  if(f==='summary') return recs.map(summaryText).join('\n\n');
+  if(f==='csv'){ const rows=[['name','group','type','sq_ft','sq_m','acres','hectares','perimeter_ft','perimeter_m','points','centre_lat','centre_lng','notes','saved_at','vertices_lat_lng']];
+    recs.forEach(s=>{const c=s.circle?s.circle.center:centroid(s.pts)||{lat:'',lng:''}; rows.push([s.name,s.group,s.type,(s.m2*SQFT).toFixed(0),s.m2.toFixed(1),(s.m2/ACRE_M2).toFixed(4),(s.m2/HA_M2).toFixed(4),(s.len*FT).toFixed(1),s.len.toFixed(1),s.pts.length,c.lat===''?'':(+c.lat).toFixed(6),c.lng===''?'':(+c.lng).toFixed(6),s.notes||'',s.savedAt,s.pts.map(p=>p.lat+' '+p.lng).join(';')]);});
+    return rows.map(r=>r.map(v=>/[",\n]/.test(String(v))?'"'+String(v).replace(/"/g,'""')+'"':v).join(',')).join('\n'); }
+  if(f==='geojson'){ return JSON.stringify({type:'FeatureCollection',features:recs.map(s=>{const g=recGeom(s); const coords=g.ring.map(p=>[+p.lng.toFixed(7),+p.lat.toFixed(7)]);
+    const geometry=g.kind==='Polygon'?{type:'Polygon',coordinates:[[...coords,coords[0]]]}:g.kind==='LineString'?{type:'LineString',coordinates:coords}:{type:'Point',coordinates:coords[0]};
+    return {type:'Feature',properties:{name:s.name,group:s.group,notes:s.notes,sq_ft:Math.round(s.m2*SQFT),sq_m:+s.m2.toFixed(1),acres:+(s.m2/ACRE_M2).toFixed(4),perimeter_ft:+(s.len*FT).toFixed(1),saved_at:s.savedAt},geometry};})},null,1); }
+  if(f==='kml'){ return '<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>JB AreaMap</name>'+
+    '<Style id="s"><LineStyle><color>ff3fd2ff</color><width>3</width></LineStyle><PolyStyle><color>553fd2ff</color></PolyStyle></Style>'+
+    recs.map(s=>{const g=recGeom(s); const cs=g.ring.map(p=>p.lng.toFixed(7)+','+p.lat.toFixed(7)+',0').join(' '); const first=g.ring[0]?g.ring[0].lng.toFixed(7)+','+g.ring[0].lat.toFixed(7)+',0':'';
+      const geom=g.kind==='Polygon'?'<Polygon><outerBoundaryIs><LinearRing><coordinates>'+cs+' '+first+'</coordinates></LinearRing></outerBoundaryIs></Polygon>':g.kind==='LineString'?'<LineString><tessellate>1</tessellate><coordinates>'+cs+'</coordinates></LineString>':'<Point><coordinates>'+cs+'</coordinates></Point>';
+      return '<Placemark><name>'+esc(s.name)+'</name><description>'+esc(summaryText(s))+'</description><styleUrl>#s</styleUrl>'+geom+'</Placemark>';}).join('')+'</Document></kml>'; }
+  if(f==='gpx'){ return '<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="JB AreaMap" xmlns="http://www.topografix.com/GPX/1/1">'+
+    recs.map(s=>{const g=recGeom(s); if(g.kind==='Point') return g.ring.map(p=>'<wpt lat="'+p.lat+'" lon="'+p.lng+'"><name>'+esc(s.name)+'</name></wpt>').join('');
+      const ring=g.kind==='Polygon'?[...g.ring,g.ring[0]]:g.ring; return '<trk><name>'+esc(s.name)+'</name><desc>'+esc(summaryText(s))+'</desc><trkseg>'+ring.map(p=>'<trkpt lat="'+p.lat.toFixed(7)+'" lon="'+p.lng.toFixed(7)+'"></trkpt>').join('')+'</trkseg></trk>';}).join('')+'</gpx>'; }
+}
+const EXT={summary:['txt','text/plain'],csv:['csv','text/csv'],geojson:['geojson','application/geo+json'],kml:['kml','application/vnd.google-earth.kml+xml'],gpx:['gpx','application/gpx+xml']};
+function openExport(all){ exportAll=all; $('exporttitle').firstChild.textContent=all?'Export all saved ':'Export '; refreshExport(); openModal('exportmodal'); }
+function refreshExport(){ document.querySelectorAll('#fmtchips .chip').forEach(c=>c.classList.toggle('on',c.dataset.fmt===fmt)); $('exporttext').value=buildExport(fmt); }
+document.querySelectorAll('#fmtchips .chip').forEach(c=>c.onclick=()=>{fmt=c.dataset.fmt; refreshExport();});
+$('exportbtn').onclick=()=>openExport(false); $('exportall').onclick=()=>{closeModal('listmodal'); openExport(true);};
+function exportName(){ const recs=recsForExport(); const base=(exportAll?'jb-areamap-all':(recs[0].name||'measurement')).replace(/[^\w\- ]+/g,'').trim().replace(/\s+/g,'-').toLowerCase(); return base+'.'+EXT[fmt][0]; }
+$('sharebtn').onclick=async()=>{ const text=$('exporttext').value; const file=new File([text],exportName(),{type:EXT[fmt][1]});
+  try{ if(navigator.canShare&&navigator.canShare({files:[file]})){ await navigator.share({files:[file],title:'JB AreaMap'}); return; } if(navigator.share){ await navigator.share({title:'JB AreaMap',text}); return; } }catch(e){ if(e.name==='AbortError')return; }
+  copyText(text,'Sharing isn’t available here. Copied instead.'); };
+$('copybtn').onclick=()=>copyText($('exporttext').value,'Copied');
+$('emailbtn').onclick=()=>{ const t=$('exporttext').value; if(t.length>1800&&fmt!=='summary'){toast('Too long for email. Use Share or Copy.');return;} location.href='mailto:?subject='+encodeURIComponent('JB AreaMap · '+exportName())+'&body='+encodeURIComponent(t); };
+async function copyText(t,msg){ try{ await navigator.clipboard.writeText(t); toast(msg);}catch(e){ const ta=$('exporttext'); ta.value=t; ta.focus(); ta.select(); ta.setSelectionRange(0,t.length); try{document.execCommand('copy'); toast(msg);}catch(err){toast('Select the text and copy it');} } }
+$('mapslink').onclick=()=>{ const c=circle.center||centroid(pts)||map.getCenter(); window.open('https://maps.google.com/?q='+c.lat.toFixed(6)+','+c.lng.toFixed(6)+'&t=k','_blank'); };
+
+/* ---------- optional Google Sheet sync (only when hosted as an Apps Script web app) ---------- */
+function syncToSheet(rec){ try{ if(window.google&&google.script&&google.script.run){ google.script.run.withFailureHandler(()=>{}).saveMeasurement(JSON.stringify(Object.assign({},rec,{summary:summaryText(rec)}))); } }catch(e){} }
+
+/* ---------- boot ---------- */
+render(); layoutSheet();
+if(navigator.geolocation&&!store.settings.noAutoLocate){ navigator.geolocation.getCurrentPosition(pos=>{ const c=pos.coords; if(!pts.length) map.setView([c.latitude,c.longitude],18); lastFix={p:{lat:c.latitude,lng:c.longitude},acc:c.accuracy,t:Date.now()}; drawMe(); },()=>{},{enableHighAccuracy:false,timeout:6000,maximumAge:60000}); }
+window.addEventListener('resize',()=>{map.invalidateSize(); layoutSheet();});
+})();
+</script>
+</body>
+</html>
