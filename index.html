@@ -237,6 +237,9 @@ h3:first-child{margin-top:2px}
       <button class="btn" id="exportbtn">Export / Share</button>
       <button class="btn" id="mapslink">Open in Maps</button>
     </div>
+    <div class="row" style="margin-top:8px">
+      <button class="btn" id="manualbtn">Enter area manually</button>
+    </div>
   </div>
 </div>
 
@@ -284,6 +287,23 @@ h3:first-child{margin-top:2px}
       <button class="btn" id="emailbtn">Email</button>
     </div>
     <p class="note">Share sends a file to Mail, Messages, Files or Google Earth. KML and GeoJSON open in Google Earth and any GIS tool.</p>
+  </div>
+</div>
+
+<!-- Manual entry sheet -->
+<div class="modal" id="manualmodal" role="dialog" aria-modal="true" aria-labelledby="manualtitle">
+  <div class="card">
+    <h2 id="manualtitle">Type a measurement <button data-close="manualmodal">Cancel</button></h2>
+    <div class="row">
+      <div class="field" style="flex:2"><label for="manarea">Area</label><input id="manarea" type="number" inputmode="decimal" step="any" placeholder="e.g. 12,500"></div>
+      <div class="field"><label for="manarea_u">Unit</label><select id="manarea_u"><option value="sqft">sq ft</option><option value="sqyd">sq yd</option><option value="m2">m²</option><option value="ac">acres</option><option value="ha">hectares</option></select></div>
+    </div>
+    <div class="row">
+      <div class="field" style="flex:2"><label for="manlen">Perimeter or length (optional)</label><input id="manlen" type="number" inputmode="decimal" step="any" placeholder="e.g. 450"></div>
+      <div class="field"><label for="manlen_u">Unit</label><select id="manlen_u"><option value="ft">ft</option><option value="yd">yd</option><option value="m">m</option></select></div>
+    </div>
+    <button class="btn primary" id="manapply">Use these numbers</button>
+    <p class="note">Use this when you already have the square footage from a plan or a client. Estimates, Save and Export work the same as a drawn shape. Tapping the map afterwards starts a drawn measurement instead.</p>
   </div>
 </div>
 
@@ -384,30 +404,31 @@ const shapeLayer=L.layerGroup().addTo(map), handleLayer=L.layerGroup().addTo(map
 let tool='area';                 // area | distance | circle | marker | walk
 let pts=[];                      // vertices {lat,lng}
 let circle={center:null,radius:0};
+let manual=null;                 // {m2,len} typed by hand instead of drawn
 let undoStack=[],redoStack=[];
 let showSaved=false, lastFix=null, watchId=null, walking=false, wakeLock=null;
 let fmt='summary';
 const $=id=>document.getElementById(id);
 
-function snapshot(){return JSON.stringify({pts,circle});}
+function snapshot(){return JSON.stringify({pts,circle,manual});}
 function pushUndo(){undoStack.push(snapshot()); if(undoStack.length>100)undoStack.shift(); redoStack=[]; }
-function restore(s){const o=JSON.parse(s); pts=o.pts; circle=o.circle; render();}
+function restore(s){const o=JSON.parse(s); pts=o.pts; circle=o.circle; manual=o.manual||null; render();}
 $('undobtn').onclick=()=>{if(!undoStack.length)return; redoStack.push(snapshot()); restore(undoStack.pop());};
 $('redobtn').onclick=()=>{if(!redoStack.length)return; undoStack.push(snapshot()); restore(redoStack.pop());};
-$('clearbtn').onclick=()=>{ if(!pts.length&&!circle.center)return; pushUndo(); pts=[]; circle={center:null,radius:0}; if(walking)stopWalk(false); render(); toast('Cleared'); };
+$('clearbtn').onclick=()=>{ if(!pts.length&&!circle.center&&!manual)return; pushUndo(); pts=[]; circle={center:null,radius:0}; manual=null; if(walking)stopWalk(false); render(); toast('Cleared'); };
 
 /* ---------- tools ---------- */
 document.querySelectorAll('.tool').forEach(b=>b.onclick=()=>setTool(b.dataset.tool));
 function setTool(t){
   if(t==='walk'){ if(walking){stopWalk(true);return;} startWalk(); return; }
   if(walking) stopWalk(false);
-  if(t!==tool && (pts.length||circle.center)){ pushUndo(); pts=[]; circle={center:null,radius:0}; }
+  if(t!==tool && (pts.length||circle.center||manual)){ pushUndo(); pts=[]; circle={center:null,radius:0}; manual=null; }
   tool=t; document.querySelectorAll('.tool').forEach(b=>{const on=b.dataset.tool===t; b.classList.toggle('on',on); b.setAttribute('aria-selected',on);});
   render();
 }
 map.on('click',e=>{
   if(walking) return;
-  const p={lat:e.latlng.lat,lng:e.latlng.lng};
+  const p={lat:e.latlng.lat,lng:e.latlng.lng}; if(manual){pushUndo(); manual=null;}
   if(tool==='circle'){ pushUndo(); if(!circle.center){circle={center:p,radius:0}; toast('Tap the edge or set a radius');} else { circle.radius=dist(circle.center,p);} render(); if(circle.radius>0) openCircleSheet(); return; }
   if(tool==='marker'){ pushUndo(); pts=[p]; render(); return; }
   pushUndo(); pts.push(p); render();
@@ -421,7 +442,7 @@ function deniedMsg(){ const standalone=window.navigator.standalone===true||match
 function startWalk(){
   if(!navigator.geolocation){toast('GPS not available in this browser');return;}
   if(tool!=='area'&&tool!=='distance'){tool='area';}
-  if(pts.length){pushUndo(); pts=[];}
+  if(pts.length||manual){pushUndo(); pts=[]; manual=null;}
   circle={center:null,radius:0};
   walking=true; document.querySelector('.tool.walk').classList.add('on');
   requestWake();
@@ -470,7 +491,8 @@ function render(){
   const style={color:'#ffd23f',weight:3,fillColor:'#ffd23f',fillOpacity:.2,interactive:false};
   const z=map.getZoom(); const showLabels=z>=16;
   let m2=0,len=0;
-  if(tool==='circle'){
+  if(manual&&!pts.length&&!circle.center){ m2=manual.m2; len=manual.len; }
+  else if(tool==='circle'){
     if(circle.center){ if(circle.radius>0){ L.circle(circle.center,Object.assign({radius:circle.radius},style)).addTo(shapeLayer); m2=Math.PI*circle.radius*circle.radius; len=2*Math.PI*circle.radius;
         const edge=destination(circle.center,90,circle.radius);
         const h=L.marker(edge,{icon:L.divIcon({className:'vtx'}),draggable:true,zIndexOffset:500}).addTo(handleLayer);
@@ -505,8 +527,8 @@ function render(){
   }
   renderReadout(m2,len);
   $('undobtn').disabled=!undoStack.length; $('redobtn').disabled=!redoStack.length;
-  const has=pts.length>0||!!circle.center; $('clearbtn').disabled=!has; $('savebtn').disabled=!(tool==='area'?m2>0:tool==='distance'?len>0:tool==='circle'?m2>0:pts.length>0);
-  hint(tool==='area'?(pts.length<3?'Tap the corners of the area ('+pts.length+'/3 minimum)':'Drag points to adjust · tap a point to remove · tap a small handle to add'):
+  const has=pts.length>0||!!circle.center||!!manual; $('clearbtn').disabled=!has; $('savebtn').disabled=!(manual?(m2>0||len>0):tool==='area'?m2>0:tool==='distance'?len>0:tool==='circle'?m2>0:pts.length>0);
+  hint(manual?'Typed measurement · tap the map to draw instead':tool==='area'?(pts.length<3?'Tap the corners of the area ('+pts.length+'/3 minimum)':'Drag points to adjust · tap a point to remove · tap a small handle to add'):
        tool==='distance'?(pts.length<2?'Tap along the line to measure':'Drag points to adjust · tap a point to remove'):
        tool==='circle'?(circle.center?'Drag the edge handle to resize':'Tap the centre of the circle'):
        tool==='marker'?(pts.length?'Drag to move the marker':'Tap to drop a marker'):'');
@@ -518,9 +540,9 @@ function liveShape(){ shapeLayer.clearLayers(); const closed=tool==='area'&&pts.
 function renderReadout(m2,len){
   const big=$('big'),sub=$('sub');
   if(tool==='marker'){ if(pts[0]){big.innerHTML=pts[0].lat.toFixed(5)+', '+pts[0].lng.toFixed(5); big.style.fontSize='22px'; sub.textContent='Marker · tap Details for more';} else {big.innerHTML='Marker'; big.style.fontSize='34px'; sub.textContent='Tap the map to drop a marker';} }
-  else if(tool==='distance'){ big.style.fontSize='34px'; const t=fmtLen(len).split(' '); big.innerHTML=(len?t[0]:'0')+'<small>'+(len?t[1]:(lenImperial()?'ft':'m'))+'</small>'; sub.textContent=pts.length<2?'Tap along the line to measure':pts.length+' points · '+(lenImperial()?nf(len,1)+' m':nf(len*FT,1)+' ft'); }
+  else if(tool==='distance'){ big.style.fontSize='34px'; const t=fmtLen(len).split(' '); big.innerHTML=(len?t[0]:'0')+'<small>'+(len?t[1]:(lenImperial()?'ft':'m'))+'</small>'; sub.textContent=manual?'Typed length · '+(lenImperial()?nf(len,1)+' m':nf(len*FT,1)+' ft'):pts.length<2?'Tap along the line to measure':pts.length+' points · '+(lenImperial()?nf(len,1)+' m':nf(len*FT,1)+' ft'); }
   else { big.style.fontSize='34px'; const a=areaPrimary(m2); big.innerHTML=a[0]+'<small>'+a[1]+'</small>';
-    sub.textContent=m2?areaSecondary(m2)+' · perimeter '+fmtLen(len):(tool==='circle'?'Tap the centre, then the edge':(pts.length?'Add '+Math.max(0,3-pts.length)+' more point'+(3-pts.length===1?'':'s')+(len?' · '+fmtLen(len):''):'Tap the map to place the first corner')); }
+    sub.textContent=m2?areaSecondary(m2)+(len?' · perimeter '+fmtLen(len):'')+(manual?' · typed':''):(tool==='circle'?'Tap the centre, then the edge':(pts.length?'Add '+Math.max(0,3-pts.length)+' more point'+(3-pts.length===1?'':'s')+(len?' · '+fmtLen(len):''):'Tap the map for corners, or tap the 0 to type an area')); }
   renderDetails(m2,len);
 }
 function renderDetails(m2,len){
@@ -565,7 +587,7 @@ document.querySelectorAll('#areaunits .chip').forEach(c=>c.onclick=()=>{store.se
 document.querySelectorAll('#lenunits .chip').forEach(c=>c.onclick=()=>{store.settings.lengthUnit=c.dataset.u; persist(); refreshUnitUI(); render();});
 document.querySelectorAll('#thickunits .chip').forEach(c=>c.onclick=()=>{store.settings.thickUnit=c.dataset.u; persist(); refreshUnitUI(); render();});
 $('unitbtn').onclick=()=>openModal('unitsmodal');
-$('big').onclick=()=>{ if(tool==='marker')return; if(tool==='distance'){ const o=LEN_UNITS.map(u=>u[0]).filter(u=>u!=='auto'); const cur=store.settings.lengthUnit==='auto'?(imperial()?'ft':'m'):store.settings.lengthUnit; store.settings.lengthUnit=o[(o.indexOf(cur)+1)%o.length]; }
+$('big').onclick=()=>{ if(tool==='marker')return; if(!pts.length&&!circle.center&&!manual){ openManual(); return; } if(tool==='distance'){ const o=LEN_UNITS.map(u=>u[0]).filter(u=>u!=='auto'); const cur=store.settings.lengthUnit==='auto'?(imperial()?'ft':'m'):store.settings.lengthUnit; store.settings.lengthUnit=o[(o.indexOf(cur)+1)%o.length]; }
   else { const o=AREA_UNITS.map(u=>u[0]); store.settings.areaUnit=o[(o.indexOf(store.settings.areaUnit)+1)%o.length]; }
   persist(); refreshUnitUI(); render(); toast('Units: '+unitLabel()); };
 refreshUnitUI();
@@ -576,6 +598,20 @@ async function locStatus(extra){ const standalone=window.navigator.standalone===
 $('detailsbtn').onclick=()=>{locStatus(); $('sheet').classList.toggle('open'); $('detailsbtn').textContent=$('sheet').classList.contains('open')?'Hide':'Details'; layoutSheet();};
 let touchY=null; $('sheet').addEventListener('touchstart',e=>{touchY=e.touches[0].clientY},{passive:true});
 $('sheet').addEventListener('touchend',e=>{ if(touchY==null)return; const dy=e.changedTouches[0].clientY-touchY; touchY=null; if(Math.abs(dy)>50&&e.target.closest('#grab,#readout')){ $('sheet').classList.toggle('open',dy<0); $('detailsbtn').textContent=$('sheet').classList.contains('open')?'Hide':'Details'; layoutSheet(); } },{passive:true});
+
+/* ---------- manual entry sheet ---------- */
+const AREA_TO_M2={sqft:1/SQFT,sqyd:1/SQYD_M2,m2:1,ac:ACRE_M2,ha:HA_M2}, LEN_TO_M={ft:1/FT,yd:3/FT,m:1};
+function openManual(){ const au=$('manarea_u'), lu=$('manlen_u');
+  if(manual){ au.value=manual.au||au.value; lu.value=manual.lu||lu.value; $('manarea').value=manual.m2?+(manual.m2/AREA_TO_M2[au.value]).toFixed(2):''; $('manlen').value=manual.len?+(manual.len/LEN_TO_M[lu.value]).toFixed(1):''; }
+  else { au.value=imperial()?'sqft':'m2'; lu.value=lenImperial()?'ft':'m'; $('manarea').value=''; $('manlen').value=''; }
+  openModal('manualmodal'); setTimeout(()=>$('manarea').focus(),50); }
+$('manapply').onclick=()=>{ const a=parseFloat($('manarea').value)||0, l=parseFloat($('manlen').value)||0; if(a<=0&&l<=0){toast('Enter an area or a length');return;}
+  pushUndo(); pts=[]; circle={center:null,radius:0}; if(walking)stopWalk(false);
+  manual={m2:a*AREA_TO_M2[$('manarea_u').value],len:l*LEN_TO_M[$('manlen_u').value],au:$('manarea_u').value,lu:$('manlen_u').value};
+  tool=a>0?'area':'distance'; document.querySelectorAll('.tool').forEach(b=>b.classList.toggle('on',b.dataset.tool===tool));
+  closeModal('manualmodal'); render(); if(!$('sheet').classList.contains('open')) $('detailsbtn').click(); toast('Typed measurement set'); };
+$('manualbtn').onclick=openManual;
+$('manarea').onkeydown=e=>{if(e.key==='Enter')$('manapply').click();}; $('manlen').onkeydown=e=>{if(e.key==='Enter')$('manapply').click();};
 
 /* ---------- circle radius sheet ---------- */
 function openCircleSheet(){ $('radiusunit').textContent=lenImperial()?'ft':'m'; $('radiusin').value=lenImperial()?Math.round(circle.radius*FT*10)/10:Math.round(circle.radius*10)/10; openModal('circlemodal'); }
@@ -609,6 +645,7 @@ document.querySelectorAll('.modal').forEach(m=>m.addEventListener('click',e=>{if
 function currentRecord(){
   const closed=tool==='area'&&pts.length>=3; let m2=0,len=0;
   if(tool==='circle'){m2=Math.PI*circle.radius**2;len=2*Math.PI*circle.radius;} else if(tool!=='marker'){ if(closed)m2=ringArea(pts); len=pathLen(pts,closed); }
+  if(manual&&!pts.length&&!circle.center) return {type:'manual',pts:[],circle:null,m2:manual.m2,len:manual.len,manual:{au:manual.au,lu:manual.lu}};
   return {type:tool==='walk'?'area':tool,pts:pts.map(p=>({lat:+p.lat.toFixed(7),lng:+p.lng.toFixed(7)})),circle:tool==='circle'?{center:circle.center,radius:circle.radius}:null,m2,len};
 }
 $('savebtn').onclick=()=>{ $('savename').value=''; $('savegroup').value=store.settings.lastGroup||''; $('savenotes').value='';
@@ -631,11 +668,11 @@ function renderList(){
     d.querySelector('.del').onclick=()=>{ if(d.dataset.confirm){store.saved=store.saved.filter(x=>x.id!==s.id); persist(); renderList(); if(showSaved)drawSaved(); toast('Deleted');} else {d.dataset.confirm='1'; d.querySelector('.del').textContent='Confirm'; setTimeout(()=>{delete d.dataset.confirm; d.querySelector('.del').textContent='Delete';},2500);} };
     list.appendChild(d); });
 }
-function loadRecord(s){ pushUndo(); tool=s.type; document.querySelectorAll('.tool').forEach(b=>b.classList.toggle('on',b.dataset.tool===tool)); pts=s.pts.map(p=>({lat:p.lat,lng:p.lng})); circle=s.circle?{center:s.circle.center,radius:s.circle.radius}:{center:null,radius:0};
+function loadRecord(s){ pushUndo(); if(s.type==='manual'){ manual={m2:s.m2,len:s.len,au:(s.manual||{}).au,lu:(s.manual||{}).lu}; pts=[]; circle={center:null,radius:0}; tool=s.m2>0?'area':'distance'; document.querySelectorAll('.tool').forEach(b=>b.classList.toggle('on',b.dataset.tool===tool)); render(); if(!$('sheet').classList.contains('open')) $('detailsbtn').click(); toast('Opened “'+s.name+'”'); return; } manual=null; tool=s.type; document.querySelectorAll('.tool').forEach(b=>b.classList.toggle('on',b.dataset.tool===tool)); pts=s.pts.map(p=>({lat:p.lat,lng:p.lng})); circle=s.circle?{center:s.circle.center,radius:s.circle.radius}:{center:null,radius:0};
   render(); const ll=s.circle?[s.circle.center]:pts; if(ll.length>1) map.fitBounds(L.latLngBounds(ll.map(p=>[p.lat,p.lng])).pad(.3)); else if(ll.length) map.setView(ll[0],18); if(s.circle) map.setView(s.circle.center,17); toast('Opened “'+s.name+'”'); }
 $('showsaved').onclick=()=>{showSaved=!showSaved; $('showsaved').textContent=showSaved?'Hide on map':'Show on map'; drawSaved(); closeModal('listmodal');};
 function drawSaved(){ savedLayer.clearLayers(); if(!showSaved)return; store.saved.forEach(s=>{ const st={color:'#8fd3ff',weight:2,fillOpacity:.08,dashArray:'4 4'}; let l;
-  if(s.circle) l=L.circle(s.circle.center,Object.assign({radius:s.circle.radius},st)); else if(s.type==='area'&&s.pts.length>=3) l=L.polygon(s.pts,st); else if(s.pts.length>=2) l=L.polyline(s.pts,st); else if(s.pts.length) l=L.circleMarker(s.pts[0],{radius:6,color:'#8fd3ff'});
+  if(s.type==='manual') return; if(s.circle) l=L.circle(s.circle.center,Object.assign({radius:s.circle.radius},st)); else if(s.type==='area'&&s.pts.length>=3) l=L.polygon(s.pts,st); else if(s.pts.length>=2) l=L.polyline(s.pts,st); else if(s.pts.length) l=L.circleMarker(s.pts[0],{radius:6,color:'#8fd3ff'});
   if(l){ l.bindTooltip(s.name,{permanent:true,direction:'center',className:'savedlabel'}); l.on('click',()=>loadRecord(s)); l.addTo(savedLayer);} }); }
 
 /* ---------- export ---------- */
@@ -643,24 +680,24 @@ function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;',
 function recsForExport(){ return exportAll? store.saved : [Object.assign(currentRecord(),{name:$('savename').value||'Current measurement',group:'',notes:'',savedAt:new Date().toISOString()})]; }
 let exportAll=false;
 function recGeom(s){ if(s.circle){ const ring=[]; for(let b=0;b<360;b+=6) ring.push(destination(s.circle.center,b,s.circle.radius)); return {kind:'Polygon',ring}; }
-  if(s.type==='area'&&s.pts.length>=3) return {kind:'Polygon',ring:s.pts}; if(s.pts.length>=2) return {kind:'LineString',ring:s.pts}; return {kind:'Point',ring:s.pts}; }
+  if(s.type==='area'&&s.pts.length>=3) return {kind:'Polygon',ring:s.pts}; if(s.pts.length>=2) return {kind:'LineString',ring:s.pts}; if(!s.pts.length) return {kind:'None',ring:[]}; return {kind:'Point',ring:s.pts}; }
 function summaryText(s){ const a=s.m2?areaPrimary(s.m2):null; const c=s.circle?s.circle.center:centroid(s.pts);
-  return [s.name+(s.group?' ('+s.group+')':''), s.m2?('Area: '+nf(s.m2*SQFT,0)+' sq ft · '+nf(s.m2*SQYD_M2,0)+' sq yd · '+nf(s.m2,0)+' m² · '+nf(s.m2/ACRE_M2,3)+' ac · '+nf(s.m2/HA_M2,3)+' ha'):'', s.len?((s.m2?'Perimeter: ':'Length: ')+nf(s.len*FT,0)+' ft · '+nf(s.len,0)+' m'):'', s.circle?('Radius: '+nf(s.circle.radius*FT,1)+' ft'):'', c?('Centre: '+c.lat.toFixed(6)+', '+c.lng.toFixed(6)+'  https://maps.google.com/?q='+c.lat.toFixed(6)+','+c.lng.toFixed(6)):'', s.notes?('Notes: '+s.notes):'', 'Measured '+new Date(s.savedAt).toLocaleString()+' with JB AreaMap (not a legal survey)'].filter(Boolean).join('\n'); }
+  return [s.name+(s.group?' ('+s.group+')':'')+(s.type==='manual'?' · typed, not drawn':''), s.m2?('Area: '+nf(s.m2*SQFT,0)+' sq ft · '+nf(s.m2*SQYD_M2,0)+' sq yd · '+nf(s.m2,0)+' m² · '+nf(s.m2/ACRE_M2,3)+' ac · '+nf(s.m2/HA_M2,3)+' ha'):'', s.len?((s.m2?'Perimeter: ':'Length: ')+nf(s.len*FT,0)+' ft · '+nf(s.len,0)+' m'):'', s.circle?('Radius: '+nf(s.circle.radius*FT,1)+' ft'):'', c?('Centre: '+c.lat.toFixed(6)+', '+c.lng.toFixed(6)+'  https://maps.google.com/?q='+c.lat.toFixed(6)+','+c.lng.toFixed(6)):'', s.notes?('Notes: '+s.notes):'', 'Measured '+new Date(s.savedAt).toLocaleString()+' with JB AreaMap (not a legal survey)'].filter(Boolean).join('\n'); }
 function buildExport(f){ const recs=recsForExport();
   if(f==='summary') return recs.map(summaryText).join('\n\n');
   if(f==='csv'){ const rows=[['name','group','type','sq_ft','sq_m','acres','hectares','perimeter_ft','perimeter_m','points','centre_lat','centre_lng','notes','saved_at','vertices_lat_lng']];
     recs.forEach(s=>{const c=s.circle?s.circle.center:centroid(s.pts)||{lat:'',lng:''}; rows.push([s.name,s.group,s.type,(s.m2*SQFT).toFixed(0),s.m2.toFixed(1),(s.m2/ACRE_M2).toFixed(4),(s.m2/HA_M2).toFixed(4),(s.len*FT).toFixed(1),s.len.toFixed(1),s.pts.length,c.lat===''?'':(+c.lat).toFixed(6),c.lng===''?'':(+c.lng).toFixed(6),s.notes||'',s.savedAt,s.pts.map(p=>p.lat+' '+p.lng).join(';')]);});
     return rows.map(r=>r.map(v=>/[",\n]/.test(String(v))?'"'+String(v).replace(/"/g,'""')+'"':v).join(',')).join('\n'); }
   if(f==='geojson'){ return JSON.stringify({type:'FeatureCollection',features:recs.map(s=>{const g=recGeom(s); const coords=g.ring.map(p=>[+p.lng.toFixed(7),+p.lat.toFixed(7)]);
-    const geometry=g.kind==='Polygon'?{type:'Polygon',coordinates:[[...coords,coords[0]]]}:g.kind==='LineString'?{type:'LineString',coordinates:coords}:{type:'Point',coordinates:coords[0]};
+    const geometry=g.kind==='None'?null:g.kind==='Polygon'?{type:'Polygon',coordinates:[[...coords,coords[0]]]}:g.kind==='LineString'?{type:'LineString',coordinates:coords}:{type:'Point',coordinates:coords[0]};
     return {type:'Feature',properties:{name:s.name,group:s.group,notes:s.notes,sq_ft:Math.round(s.m2*SQFT),sq_m:+s.m2.toFixed(1),acres:+(s.m2/ACRE_M2).toFixed(4),perimeter_ft:+(s.len*FT).toFixed(1),saved_at:s.savedAt},geometry};})},null,1); }
   if(f==='kml'){ return '<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>JB AreaMap</name>'+
     '<Style id="s"><LineStyle><color>ff3fd2ff</color><width>3</width></LineStyle><PolyStyle><color>553fd2ff</color></PolyStyle></Style>'+
     recs.map(s=>{const g=recGeom(s); const cs=g.ring.map(p=>p.lng.toFixed(7)+','+p.lat.toFixed(7)+',0').join(' '); const first=g.ring[0]?g.ring[0].lng.toFixed(7)+','+g.ring[0].lat.toFixed(7)+',0':'';
-      const geom=g.kind==='Polygon'?'<Polygon><outerBoundaryIs><LinearRing><coordinates>'+cs+' '+first+'</coordinates></LinearRing></outerBoundaryIs></Polygon>':g.kind==='LineString'?'<LineString><tessellate>1</tessellate><coordinates>'+cs+'</coordinates></LineString>':'<Point><coordinates>'+cs+'</coordinates></Point>';
+      const geom=g.kind==='None'?'':g.kind==='Polygon'?'<Polygon><outerBoundaryIs><LinearRing><coordinates>'+cs+' '+first+'</coordinates></LinearRing></outerBoundaryIs></Polygon>':g.kind==='LineString'?'<LineString><tessellate>1</tessellate><coordinates>'+cs+'</coordinates></LineString>':'<Point><coordinates>'+cs+'</coordinates></Point>';
       return '<Placemark><name>'+esc(s.name)+'</name><description>'+esc(summaryText(s))+'</description><styleUrl>#s</styleUrl>'+geom+'</Placemark>';}).join('')+'</Document></kml>'; }
   if(f==='gpx'){ return '<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="JB AreaMap" xmlns="http://www.topografix.com/GPX/1/1">'+
-    recs.map(s=>{const g=recGeom(s); if(g.kind==='Point') return g.ring.map(p=>'<wpt lat="'+p.lat+'" lon="'+p.lng+'"><name>'+esc(s.name)+'</name></wpt>').join('');
+    recs.map(s=>{const g=recGeom(s); if(g.kind==='None') return ''; if(g.kind==='Point') return g.ring.map(p=>'<wpt lat="'+p.lat+'" lon="'+p.lng+'"><name>'+esc(s.name)+'</name></wpt>').join('');
       const ring=g.kind==='Polygon'?[...g.ring,g.ring[0]]:g.ring; return '<trk><name>'+esc(s.name)+'</name><desc>'+esc(summaryText(s))+'</desc><trkseg>'+ring.map(p=>'<trkpt lat="'+p.lat.toFixed(7)+'" lon="'+p.lng.toFixed(7)+'"></trkpt>').join('')+'</trkseg></trk>';}).join('')+'</gpx>'; }
 }
 const EXT={summary:['txt','text/plain'],csv:['csv','text/csv'],geojson:['geojson','application/geo+json'],kml:['kml','application/vnd.google-earth.kml+xml'],gpx:['gpx','application/gpx+xml']};
